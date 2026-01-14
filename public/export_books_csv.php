@@ -1,0 +1,174 @@
+<?php
+declare(strict_types=1);
+
+require_once __DIR__ . '/functions.php';
+require __DIR__ . '/auth.php';
+require_login();
+
+error_reporting(E_ALL & ~E_DEPRECATED);
+ini_set('display_errors', '0');
+
+header('Content-Type: text/csv; charset=utf-8');
+header('Content-Disposition: attachment; filename="books_export.csv"');
+header('Cache-Control: no-store');
+
+$pdo = pdo();
+
+/**
+ * Inputs:
+ * - q, sort, dir  (same logic as list_books.php; sort allows series)
+ */
+$q      = isset($_GET['q']) ? trim((string)$_GET['q']) : '';
+$sort_in = strtolower((string)($_GET['sort'] ?? 'title'));
+$dir_in  = strtolower((string)($_GET['dir']  ?? 'asc'));
+$dir_sql = ($dir_in === 'desc') ? 'DESC' : 'ASC';
+
+/** Sorting whitelist */
+$sortable = [
+    'id'        => 'b.book_id',
+    'title'     => 'b.title',
+    'subtitle'  => 'b.subtitle',
+    'series'    => 'b.series',
+    'publisher' => 'p.name',
+    'year'      => 'b.year_published',
+    'authors'   => "CASE WHEN authors IS NULL THEN 1 ELSE 0 END, authors",
+    'bookcase'  => 'pl.bookcase_no, pl.shelf_no',
+];
+$order_by = $sortable[$sort_in] ?? $sortable['title'];
+
+/** WHERE conditions */
+$where_chunks = [];
+$params = [];
+
+if ($q !== '') {
+    $tokens = preg_split('/\s+/', $q, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+
+    foreach ($tokens as $i => $tok) {
+        $like = '%' . $tok . '%';
+
+        $ph = [
+            "t{$i}_title"    => $like,
+            "t{$i}_subtitle" => $like,
+            "t{$i}_series"   => $like,
+            "t{$i}_isbn"     => $like,
+            "t{$i}_lccn"     => $like,
+            "t{$i}_pub"      => $like,
+            "t{$i}_an"       => $like,
+            "t{$i}_afn"      => $like,
+            "t{$i}_aln"      => $like,
+            "t{$i}_asn"      => $like,
+        ];
+
+        $where_chunks[] = "("
+            . "b.title LIKE :t{$i}_title OR "
+            . "b.subtitle LIKE :t{$i}_subtitle OR "
+            . "b.series LIKE :t{$i}_series OR "
+            . "b.isbn LIKE :t{$i}_isbn OR "
+            . "b.lccn LIKE :t{$i}_lccn OR "
+            . "p.name LIKE :t{$i}_pub OR "
+            . "EXISTS ("
+            . "  SELECT 1 FROM Books_Authors ba "
+            . "  JOIN Authors a ON a.author_id = ba.author_id "
+            . "  WHERE ba.book_id = b.book_id "
+            . "    AND (a.name       LIKE :t{$i}_an "
+            . "         OR a.first_name LIKE :t{$i}_afn "
+            . "         OR a.last_name  LIKE :t{$i}_aln "
+            . "         OR a.sort_name  LIKE :t{$i}_asn)"
+            . ")"
+            . ")";
+
+        foreach ($ph as $k => $v) { $params[$k] = $v; }
+    }
+}
+
+$where_sql = $where_chunks ? ('WHERE ' . implode(' AND ', $where_chunks)) : '';
+
+/** MAIN SELECT */
+$sql = "
+SELECT
+  b.book_id AS id,
+  b.title, b.subtitle, b.series,
+  b.year_published,
+  b.isbn, b.lccn,
+  b.loaned_to, b.loaned_date,
+  b.cover_image,
+  p.name AS publisher,
+  (
+    SELECT GROUP_CONCAT(DISTINCT
+             NULLIF(
+               TRIM(
+                 COALESCE(
+                   a.name,
+                   CASE
+                     WHEN a.is_hungarian = 1
+                       THEN CONCAT(COALESCE(a.last_name,''),' ',COALESCE(a.first_name,''))
+                     ELSE CONCAT(COALESCE(a.first_name,''),' ',COALESCE(a.last_name,''))
+                   END
+                 )
+               ), ''
+             )
+             ORDER BY ba.author_ord SEPARATOR '; ')
+      FROM Books_Authors ba
+      JOIN Authors a ON a.author_id = ba.author_id
+     WHERE ba.book_id = b.book_id
+  ) AS authors,
+  (
+    SELECT GROUP_CONCAT(DISTINCT s.name ORDER BY s.name SEPARATOR '; ')
+      FROM Books_Subjects bs
+      JOIN Subjects s ON s.subject_id = bs.subject_id
+     WHERE bs.book_id = b.book_id
+  ) AS subjects,
+  pl.bookcase_no,
+  pl.shelf_no
+FROM Books b
+LEFT JOIN Publishers p ON p.publisher_id = b.publisher_id
+LEFT JOIN Placement  pl ON pl.placement_id = b.placement_id
+$where_sql
+ORDER BY $order_by $dir_sql, b.book_id ASC
+";
+
+try {
+    $st = $pdo->prepare($sql);
+    foreach ($params as $k => $v) { $st->bindValue(':' . $k, $v, PDO::PARAM_STR); }
+    $st->execute();
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+
+} catch (Throwable $e) {
+    echo "ERROR: " . $e->getMessage();
+    exit;
+}
+
+/** CSV output */
+$out = fopen('php://output', 'w');
+
+/* Fix PHP 8.1+ deprecation: explicitly pass escape char */
+fputcsv($out, [
+    'ID', 'Title', 'Subtitle', 'Series', 'Year', 'ISBN', 'LCCN',
+    'Publisher', 'Authors', 'Subjects', 'Loaned To', 'Loaned Date',
+    'Bookcase', 'Shelf', 'Cover Image', 'Cover Filename'
+], ',', '"', "\\");
+
+foreach ($rows as $r) {
+    $cover_fn = $r['cover_image'] ? basename($r['cover_image']) : '';
+
+    fputcsv($out, [
+        $r['id'],
+        $r['title'],
+        $r['subtitle'],
+        $r['series'],
+        $r['year_published'],
+        $r['isbn'],
+        $r['lccn'],
+        $r['publisher'],
+        $r['authors'],
+        $r['subjects'],
+        $r['loaned_to'],
+        $r['loaned_date'],
+        $r['bookcase_no'],
+        $r['shelf_no'],
+        $r['cover_image'],
+        $cover_fn,                    // <--- NEW FINAL COLUMN
+    ], ',', '"', "\\");
+}
+
+fclose($out);

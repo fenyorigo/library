@@ -1,0 +1,19 @@
+DirectoryIndex dist/index.html
+
+RewriteEngine On
+
+# ---- NEVER rewrite PHP ----
+RewriteRule ^.*\.php$ - [L]
+
+# ---- NEVER rewrite uploads or dist ----
+RewriteRule ^dist/ - [L]
+RewriteRule ^uploads/ - [L]
+RewriteRule ^user-assets/ - [L]
+
+# ---- Serve existing files ----
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# ---- Everything else → SPA ----
+RewriteRule . dist/index.html [L]

@@ -1,0 +1,654 @@
+<?php
+/**
+ * Central PDO factory (lazy singleton) + shared helpers.
+ * Uses ../config.php for DB creds.
+ */
+
+declare(strict_types=1);
+
+error_reporting(E_ALL & ~E_DEPRECATED);
+ini_set('display_errors', '0');
+
+/* --------------------------- Error helpers --------------------------- */
+
+function json_error(string $msg, int $code = 500): void {
+    http_response_code($code);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['error' => $msg], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+function json_fail(string $msg, int $code = 500, array $extra = []): void {
+    http_response_code($code);
+    header('Content-Type: application/json; charset=utf-8');
+    $payload = array_merge(['ok' => false, 'error' => $msg], $extra);
+    echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+function json_out($data, int $code = 200): void {
+    http_response_code($code);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+function json_in(): array {
+    $raw = file_get_contents('php://input');
+    $d = $raw ? json_decode($raw, true) : null;
+    return is_array($d) ? $d : [];
+}
+
+function start_secure_session(): void {
+    if (session_status() === PHP_SESSION_ACTIVE) return;
+
+    $params = session_get_cookie_params();
+    $secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || ((int)($_SERVER['SERVER_PORT'] ?? 0) === 443);
+
+    $cookie_params = [
+        'lifetime' => 0,
+        'path' => $params['path'] ?? '/',
+        'domain' => $params['domain'] ?? '',
+        'secure' => $secure,
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ];
+
+    if (PHP_VERSION_ID >= 70300) {
+        session_set_cookie_params($cookie_params);
+    } else {
+        $path = ($cookie_params['path'] ?? '/') . '; samesite=Lax';
+        session_set_cookie_params(
+            $cookie_params['lifetime'],
+            $path,
+            $cookie_params['domain'],
+            $cookie_params['secure'],
+            $cookie_params['httponly']
+        );
+    }
+
+    session_start();
+}
+
+function auth_failure_delay(): void {
+    usleep(200000);
+}
+
+function password_policy_errors(string $password, string $username = ''): array {
+    $errors = [];
+    if (strlen($password) < 12) $errors[] = 'Password must be at least 12 characters.';
+    if (!preg_match('/[a-z]/', $password)) $errors[] = 'Password must include a lowercase letter.';
+    if (!preg_match('/[A-Z]/', $password)) $errors[] = 'Password must include an uppercase letter.';
+    if (!preg_match('/[0-9]/', $password)) $errors[] = 'Password must include a digit.';
+    if (!preg_match('/[^a-zA-Z0-9]/', $password)) $errors[] = 'Password must include a special character.';
+    if ($username !== '' && stripos($password, $username) !== false) {
+        $errors[] = 'Password cannot contain the username.';
+    }
+    return $errors;
+}
+
+function users_table_has_column(PDO $pdo, string $column): bool {
+    static $cache = [];
+    $key = strtolower($column);
+    if (array_key_exists($key, $cache)) return $cache[$key];
+
+    $st = $pdo->prepare("
+        SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'Users'
+          AND COLUMN_NAME = ?
+    ");
+    $st->execute([$column]);
+    $exists = (int)$st->fetchColumn() > 0;
+    $cache[$key] = $exists;
+    return $exists;
+}
+
+function auth_events_table_exists(PDO $pdo): bool {
+    static $exists = null;
+    if ($exists !== null) return $exists;
+
+    $st = $pdo->query("
+        SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'AuthEvents'
+    ");
+    $exists = (int)$st->fetchColumn() > 0;
+    return $exists;
+}
+
+function count_active_admins(PDO $pdo): int {
+    $st = $pdo->query("SELECT COUNT(*) FROM Users WHERE role = 'admin' AND is_active = 1");
+    return (int)$st->fetchColumn();
+}
+
+function count_admins(PDO $pdo): int {
+    $st = $pdo->query("SELECT COUNT(*) FROM Users WHERE role = 'admin'");
+    return (int)$st->fetchColumn();
+}
+
+function N($v): ?string {
+    if (!isset($v)) return null;
+    if (is_string($v)) {
+        $v = trim($v);
+        return $v === '' ? null : $v;
+    }
+    if (is_scalar($v)) {
+        $v = trim((string)$v);
+        return $v === '' ? null : $v;
+    }
+    return null;
+}
+
+/* ------------------------------ PDO ------------------------------- */
+
+function pdo(): PDO {
+    static $pdo = null;
+    if ($pdo instanceof PDO) return $pdo;
+
+    $env_path = getenv('BOOKCATALOG_CONFIG') ?: '';
+    $home = getenv('HOME') ?: '';
+    $default_path = $home !== '' ? $home . '/.config/config.php' : '';
+    $local_path = __DIR__ . '/../config.php';
+
+    $candidates = [];
+    if ($env_path !== '') $candidates[] = $env_path;
+    $candidates[] = $local_path;
+    if ($default_path !== '') $candidates[] = $default_path;
+
+    $config_path = null;
+    foreach ($candidates as $candidate) {
+        if ($candidate !== '' && is_readable($candidate)) {
+            $config_path = $candidate;
+            break;
+        }
+    }
+    if ($config_path === null) {
+        throw new RuntimeException("Missing or unreadable config.php (set BOOKCATALOG_CONFIG, use ./config.php, or ~/.config/config.php)");
+    }
+
+    $cfg = require $config_path;
+    if (!is_array($cfg) || !isset($cfg['db']) || !is_array($cfg['db'])) {
+        throw new RuntimeException("config.php does not return ['db'=>...] array");
+    }
+
+    $db = $cfg['db'];
+    $host = $db['host'] ?? null;
+    $port = $db['port'] ?? 3306;
+    $name = $db['name'] ?? ($db['dbname'] ?? null);
+    $user = $db['user'] ?? null;
+    $pass = $db['pass'] ?? null;
+    $charset = $db['charset'] ?? 'utf8mb4';
+
+    if (!$host || !$name || $user === null || $pass === null) {
+        throw new RuntimeException("config.php missing db.host, db.name, db.user, or db.pass");
+    }
+
+    $dsn = sprintf(
+        'mysql:host=%s;port=%d;dbname=%s;charset=%s',
+        $host,
+        (int)$port,
+        $name,
+        $charset
+    );
+
+    $pdo = new PDO($dsn, $user, $pass, [
+        PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::ATTR_EMULATE_PREPARES   => false,
+    ]);
+    return $pdo;
+}
+
+/* -------------------------- Misc helpers --------------------------- */
+
+/**
+ * Ensure a string is valid UTF-8.
+ * Does NOT convert encodings — only strips invalid sequences.
+ */
+function utf8_clean(string $s): string {
+    $out = @iconv('UTF-8', 'UTF-8//IGNORE', $s);
+    return ($out !== false) ? $out : $s;
+}
+
+function auth_event_request_meta(): array {
+    $cf_ip = trim((string)($_SERVER['HTTP_CF_CONNECTING_IP'] ?? ''));
+    $remote_ip = trim((string)($_SERVER['REMOTE_ADDR'] ?? ''));
+    $ip_address = $cf_ip !== '' ? $cf_ip : ($remote_ip !== '' ? $remote_ip : '');
+    $user_agent = trim((string)($_SERVER['HTTP_USER_AGENT'] ?? ''));
+    $user_agent = $user_agent !== '' ? utf8_clean($user_agent) : null;
+
+    $details = [];
+    if ($cf_ip !== '') $details['ip_cf'] = $cf_ip;
+    if ($remote_ip !== '') $details['ip_remote'] = $remote_ip;
+
+    return [
+        'ip_address' => $ip_address,
+        'user_agent' => $user_agent,
+        'details' => $details,
+    ];
+}
+
+function log_auth_event(string $event_type, ?int $user_id, ?string $username_snapshot, array $details = []): void {
+    try {
+        $pdo = pdo();
+        if (!auth_events_table_exists($pdo)) return;
+
+        $meta = auth_event_request_meta();
+        $details = array_merge($meta['details'], $details);
+        $details_json = $details ? json_encode($details, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : null;
+
+        $username_snapshot = utf8_clean((string)($username_snapshot ?? ''));
+        if (strlen($username_snapshot) > 190) {
+            $username_snapshot = substr($username_snapshot, 0, 190);
+        }
+
+        $user_agent = $meta['user_agent'];
+        if ($user_agent !== null && strlen($user_agent) > 512) {
+            $user_agent = substr($user_agent, 0, 512);
+        }
+
+        $event_type = substr($event_type, 0, 32);
+
+        $ins = $pdo->prepare("
+            INSERT INTO AuthEvents
+                (user_id, username_snapshot, event_type, ip_address, user_agent, details, created_at)
+            VALUES
+                (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())
+        ");
+        $ins->execute([
+            $user_id,
+            $username_snapshot,
+            $event_type,
+            (string)$meta['ip_address'],
+            $user_agent,
+            $details_json,
+        ]);
+    } catch (Throwable $e) {
+        // Fail closed: auth flows should not break on logging errors.
+    }
+}
+
+/* ---------------------- User preferences helpers ---------------------- */
+
+function normalize_user_preferences(array $row): array {
+    $logo = isset($row['logo_path']) ? trim((string)$row['logo_path']) : '';
+    if ($logo !== '') {
+        $logo = ltrim($logo, '/');
+    }
+    $per = isset($row['per_page']) ? (int)$row['per_page'] : 25;
+    if ($per < 1) $per = 25;
+    $bool = function ($value, bool $default): bool {
+        if ($value === null) return $default;
+        return (bool)$value;
+    };
+    return [
+        'logo_url' => $logo !== '' ? $logo : null,
+        'bg_color' => $row['bg_color'] ?? null,
+        'fg_color' => $row['fg_color'] ?? null,
+        'text_size' => $row['text_size'] ?? 'medium',
+        'per_page' => $per,
+        'show_cover' => $bool($row['show_cover'] ?? null, true),
+        'show_subtitle' => $bool($row['show_subtitle'] ?? null, true),
+        'show_series' => $bool($row['show_series'] ?? null, true),
+        'show_is_hungarian' => $bool($row['show_is_hungarian'] ?? null, true),
+        'show_publisher' => $bool($row['show_publisher'] ?? null, true),
+        'show_year' => $bool($row['show_year'] ?? null, true),
+        'show_status' => $bool($row['show_status'] ?? null, true),
+        'show_placement' => $bool($row['show_placement'] ?? null, true),
+        'show_isbn' => $bool($row['show_isbn'] ?? null, false),
+        'show_loaned_to' => $bool($row['show_loaned_to'] ?? null, false),
+        'show_loaned_date' => $bool($row['show_loaned_date'] ?? null, false),
+        'show_subjects' => $bool($row['show_subjects'] ?? null, false),
+    ];
+}
+
+function fetch_user_preferences(PDO $pdo, int $user_id): array {
+    $st = $pdo->prepare("SELECT logo_path, bg_color, fg_color, text_size, per_page,
+                                show_cover, show_subtitle, show_series, show_is_hungarian,
+                                show_publisher, show_year, show_status, show_placement,
+                                show_isbn, show_loaned_to, show_loaned_date, show_subjects
+                         FROM UserPreferences
+                         WHERE user_id = ? LIMIT 1");
+    $st->execute([$user_id]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$row) {
+        return [
+            'logo_url' => null,
+            'bg_color' => null,
+            'fg_color' => null,
+            'text_size' => 'medium',
+            'per_page' => 25,
+            'show_cover' => true,
+            'show_subtitle' => true,
+            'show_series' => true,
+            'show_is_hungarian' => true,
+            'show_publisher' => true,
+            'show_year' => true,
+            'show_status' => true,
+            'show_placement' => true,
+            'show_isbn' => false,
+            'show_loaned_to' => false,
+            'show_loaned_date' => false,
+            'show_subjects' => false,
+        ];
+    }
+    return normalize_user_preferences($row);
+}
+
+/* ---------------------- Placement get-or-create --------------------- */
+
+function getOrCreatePlacementId(PDO $pdo, ?array $placement): ?int {
+    if (!$placement || !is_array($placement)) return null;
+
+    $bookcase = isset($placement['bookcase_no']) ? (int)$placement['bookcase_no'] : null;
+    $shelf    = isset($placement['shelf_no'])    ? (int)$placement['shelf_no']    : null;
+
+    if ($bookcase === null || $shelf === null) return null;
+
+    $sel = $pdo->prepare("SELECT placement_id FROM Placement WHERE bookcase_no = ? AND shelf_no = ? LIMIT 1");
+    $sel->execute([$bookcase, $shelf]);
+    $id = $sel->fetchColumn();
+    if ($id) return (int)$id;
+
+    try {
+        $ins = $pdo->prepare("INSERT INTO Placement (bookcase_no, shelf_no) VALUES (?, ?)");
+        $ins->execute([$bookcase, $shelf]);
+        return (int)$pdo->lastInsertId();
+    } catch (Throwable $e) {
+        // race → reselect
+        $sel->execute([$bookcase, $shelf]);
+        $id = $sel->fetchColumn();
+        if ($id) return (int)$id;
+        throw $e;
+    }
+}
+
+/* ----------------- Generic name get-or-create (1 col) --------------- */
+
+function getOrCreateIdByName(PDO $pdo, string $table, string $id_col, string $name_col, ?string $name_value): ?int {
+    if ($name_value === null || $name_value === '') return null;
+
+    $name_value = preg_replace('/\s+/', ' ', trim($name_value));
+
+    $sel = $pdo->prepare("SELECT {$id_col} FROM {$table} WHERE {$name_col} = ? LIMIT 1");
+    $sel->execute([$name_value]);
+    $id = $sel->fetchColumn();
+    if ($id) return (int)$id;
+
+    try {
+        $ins = $pdo->prepare("INSERT INTO {$table} ({$name_col}) VALUES (?)");
+        $ins->execute([$name_value]);
+        return (int)$pdo->lastInsertId();
+    } catch (Throwable $e) {
+        $sel->execute([$name_value]);
+        $id = $sel->fetchColumn();
+        if ($id) return (int)$id;
+        throw $e;
+    }
+}
+
+/* ---------------- Publisher helpers (unchanged) -------------------- */
+
+function getPublisherId(PDO $pdo, ?string $publisher_name): ?int {
+    return getOrCreateIdByName($pdo, 'Publishers', 'publisher_id', 'name', $publisher_name);
+}
+
+/* --------------------- Author helpers (NEW) ------------------------ */
+
+/**
+ * Parse free-text like "Bach, Johann Sebastian" or "Johann Sebastian Bach"
+ * into [first_name, last_name, sort_name("Last First")].
+ * If $is_hungarian is true and there's no comma, treat the first token as last name.
+ */
+function parse_author_free_text(string $s, bool $is_hungarian = false): array {
+    $s = trim(preg_replace('/\s+/', ' ', $s));
+    if ($s === '') return ['', '', ''];
+
+    if (strpos($s, ',') !== false) {
+        // "Last, First …"
+        [$last, $first] = array_map('trim', explode(',', $s, 2));
+    } else {
+        // "First … Last" (last token as last name)
+        $parts = explode(' ', $s);
+        if (count($parts) === 1) {
+            $first = '';
+            $last  = $parts[0];
+        } elseif ($is_hungarian) {
+            $last  = array_shift($parts);
+            $first = implode(' ', $parts);
+        } else {
+            $last  = array_pop($parts);
+            $first = implode(' ', $parts);
+        }
+    }
+
+    $first = trim($first);
+    $last  = trim($last);
+    $sort  = trim($last . ' ' . $first); // legacy sort (no comma)
+
+    return [$first, $last, $sort];
+}
+
+function format_author_display(?string $first, ?string $last, int $is_hungarian): string {
+    $first = trim((string)$first);
+    $last  = trim((string)$last);
+    if ($first === '' && $last === '') return '';
+    if ($is_hungarian) return trim($last . ' ' . $first);
+    return trim($first . ' ' . $last);
+}
+
+function format_author_sort(?string $first, ?string $last): string {
+    $first = trim((string)$first);
+    $last  = trim((string)$last);
+    if ($first === '' && $last === '') return '';
+    if ($first === '') return $last;
+    if ($last === '') return $first;
+    return trim($last . ', ' . $first);
+}
+
+/**
+ * Find or create an author row using Authors(first_name,last_name,sort_name).
+ * Match priority:
+ *   1) exact match on sort_name
+ *   2) exact match on TRIM(CONCAT(first_name,' ',last_name))
+ * Otherwise INSERT (first_name,last_name,sort_name).
+ */
+function getOrCreateAuthorIdFromFree(PDO $pdo, string $free_text, ?int $force_is_hungarian = null): ?int {
+    $free_text = preg_replace('/\s+/', ' ', trim($free_text));
+    if ($free_text === '') return null;
+
+    $has_comma = (strpos($free_text, ',') !== false);
+    $is_hungarian = ($force_is_hungarian !== null) ? (int)!!$force_is_hungarian : ($has_comma ? 1 : 0);
+
+    [$first, $last, $sort] = parse_author_free_text($free_text, (bool)$is_hungarian);
+    $display = format_author_display($first, $last, $is_hungarian);
+    $sort_new = format_author_sort($first, $last);
+    $sort_legacy = trim($last . ' ' . $first);
+    $name_alt = trim($last . ', ' . $first);
+
+    // Alternate parse to tolerate flipped HU/standard order in stored data.
+    $is_hungarian_alt = (int)!$is_hungarian;
+    [$first_alt, $last_alt] = parse_author_free_text($free_text, (bool)$is_hungarian_alt);
+    $display_alt = format_author_display($first_alt, $last_alt, $is_hungarian_alt);
+    $sort_alt = format_author_sort($first_alt, $last_alt);
+    $sort_legacy_alt = trim($last_alt . ' ' . $first_alt);
+    $name_alt_alt = trim($last_alt . ', ' . $first_alt);
+    $first_last = trim($first . ' ' . $last);
+    $first_last_alt = trim($first_alt . ' ' . $last_alt);
+    $last_first = trim($last . ' ' . $first);
+    $last_first_alt = trim($last_alt . ' ' . $first_alt);
+
+    // Try by sort_name
+    $sel = $pdo->prepare("SELECT author_id FROM Authors WHERE sort_name IN (?, ?) LIMIT 1");
+    $sel->execute([$sort_new, $sort_legacy]);
+    $id = $sel->fetchColumn();
+    if ($id) return (int)$id;
+    if ($sort_alt && ($sort_alt !== $sort_new || $sort_legacy_alt !== $sort_legacy)) {
+        $sel->execute([$sort_alt, $sort_legacy_alt]);
+        $id = $sel->fetchColumn();
+        if ($id) return (int)$id;
+    }
+
+    // Try by name (legacy column)
+    $sel_name = $pdo->prepare("SELECT author_id FROM Authors WHERE name IN (?, ?) LIMIT 1");
+    $sel_name->execute([$display, $name_alt]);
+    $id = $sel_name->fetchColumn();
+    if ($id) return (int)$id;
+    if ($display_alt && ($display_alt !== $display || $name_alt_alt !== $name_alt)) {
+        $sel_name->execute([$display_alt, $name_alt_alt]);
+        $id = $sel_name->fetchColumn();
+        if ($id) return (int)$id;
+    }
+
+    // Fallback by display "First Last"
+    $sel2 = $pdo->prepare("SELECT author_id
+                           FROM Authors
+                          WHERE TRIM(CONCAT(COALESCE(first_name,''),' ',COALESCE(last_name,''))) IN (?, ?)
+                          LIMIT 1");
+    $sel2->execute([$first_last, $first_last_alt ?: $first_last]);
+    $id = $sel2->fetchColumn();
+    if ($id) return (int)$id;
+
+    // Fallback by display "Last First"
+    $sel3 = $pdo->prepare("SELECT author_id
+                           FROM Authors
+                          WHERE TRIM(CONCAT(COALESCE(last_name,''),' ',COALESCE(first_name,''))) IN (?, ?)
+                          LIMIT 1");
+    $sel3->execute([$last_first, $last_first_alt ?: $last_first]);
+    $id = $sel3->fetchColumn();
+    if ($id) return (int)$id;
+
+    // Insert
+    try {
+        $ins = $pdo->prepare("INSERT INTO Authors (name, first_name, last_name, sort_name, is_hungarian)
+                          VALUES (?, ?, ?, ?, ?)");
+        $ins->execute([
+            $display ?: null,
+            $first ?: null,
+            $last ?: null,
+            $sort_new ?: null,
+            $is_hungarian,
+        ]);
+        return (int)$pdo->lastInsertId();
+    } catch (Throwable $e) {
+        // Race → reselect by sort_name
+        $sel->execute([$sort_new, $sort_legacy]);
+        $id = $sel->fetchColumn();
+        if ($id) return (int)$id;
+        if ($sort_alt && ($sort_alt !== $sort_new || $sort_legacy_alt !== $sort_legacy)) {
+            $sel->execute([$sort_alt, $sort_legacy_alt]);
+            $id = $sel->fetchColumn();
+            if ($id) return (int)$id;
+        }
+        $sel_name->execute([$display, $name_alt]);
+        $id = $sel_name->fetchColumn();
+        if ($id) return (int)$id;
+        if ($display_alt && ($display_alt !== $display || $name_alt_alt !== $name_alt)) {
+            $sel_name->execute([$display_alt, $name_alt_alt]);
+            $id = $sel_name->fetchColumn();
+            if ($id) return (int)$id;
+        }
+        $sel2->execute([$first_last, $first_last_alt ?: $first_last]);
+        $id = $sel2->fetchColumn();
+        if ($id) return (int)$id;
+        $sel3->execute([$last_first, $last_first_alt ?: $last_first]);
+        $id = $sel3->fetchColumn();
+        if ($id) return (int)$id;
+        throw $e;
+    }
+}
+
+/** Public adapter (keeps old signature). */
+function getAuthorId(PDO $pdo, ?string $author_name, ?int $force_is_hungarian = null): ?int {
+    $author_name = trim((string)$author_name);
+
+    if ($author_name === '' || $author_name === ',' || $author_name === ';')
+        return null;    // prevent invalid inserts
+
+    return getOrCreateAuthorIdFromFree($pdo, $author_name, $force_is_hungarian);
+}
+/* --------------- Book↔Authors linking (uses new helper) ------------- */
+
+function attachAuthorsToBook(PDO $pdo, int $book_id, ?string $authors_csv, ?int $force_is_hungarian = null): void {
+    if (!$book_id || !$authors_csv) return;
+
+    $s = trim($authors_csv);
+    if ($s === '') return;
+
+    // Prefer semicolons to separate multiple authors.
+    // If no semicolons, handle commas carefully to preserve "Last, First".
+    $parts = [];
+    if (strpos($s, ';') !== false) {
+        $parts = explode(';', $s);
+    } else {
+        $comma_count = substr_count($s, ',');
+        if ($comma_count === 0) {
+            $parts = [$s];
+        } else {
+            $pieces = array_map('trim', explode(',', $s));
+            $pieces = array_values(array_filter($pieces, function ($p) {
+                return $p !== '' && $p !== ',' && $p !== ';';
+            }));
+
+            if ($comma_count === 1 && count($pieces) >= 2) {
+                $parts = [$pieces[0] . ', ' . $pieces[1]];
+            } elseif (count($pieces) >= 2 && count($pieces) % 2 === 0) {
+                for ($i = 0; $i < count($pieces); $i += 2) {
+                    $parts[] = $pieces[$i] . ', ' . $pieces[$i + 1];
+                }
+            } else {
+                $parts = $pieces;
+            }
+        }
+    }
+
+    // Normalize each name, drop empties AND drop pure punctuation
+    $names = [];
+    foreach ($parts as $p) {
+        $name = preg_replace('/\s+/', ' ', trim($p));
+
+        // Remove stray punctuation-only tokens (like "" or "," or ";")
+        if ($name === '' || $name === ',' || $name === ';') continue;
+
+        $names[] = $name;
+    }
+    if (!$names) return;
+
+    $own_tx = false;
+    if (!$pdo->inTransaction()) {
+        $pdo->beginTransaction();
+        $own_tx = true;
+    }
+
+    try {
+        foreach ($names as $name) {
+            // Guard again
+            if ($name === '') continue;
+
+            $author_id = getAuthorId($pdo, $name, $force_is_hungarian);
+            if (!$author_id) continue; // getAuthorId returns null on empty; be safe
+
+            // Link if not already linked
+            $link = $pdo->prepare("SELECT 1 FROM Books_Authors WHERE book_id = ? AND author_id = ? LIMIT 1");
+            $link->execute([$book_id, $author_id]);
+            if (!$link->fetchColumn()) {
+                $ins = $pdo->prepare("INSERT INTO Books_Authors (book_id, author_id) VALUES (?, ?)");
+                $ins->execute([$book_id, $author_id]);
+            }
+        }
+        if ($own_tx) $pdo->commit();
+    } catch (Throwable $e) {
+        if ($own_tx && $pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+}
+
+/* ---------------------- Convenience shims --------------------------- */
+
+function publisherId(?string $publisher_name): ?int { return getPublisherId(pdo(), $publisher_name); }
+function authorId(?string $author_name): ?int      { return getAuthorId(pdo(), $author_name); }
+function attachAuthors(int $book_id, ?string $authors_csv, ?int $force_is_hungarian = null): void {
+    attachAuthorsToBook(pdo(), $book_id, $authors_csv, $force_is_hungarian);
+}

@@ -1,0 +1,1060 @@
+<template>
+  <main class="container">
+    <header class="topbar">
+      <div class="logo-slot">
+        <img v-if="logoUrl" :src="logoUrl" alt="Logo" />
+      </div>
+      <div class="title-slot">
+        <div class="brand-title">
+          My Book Catalog
+          <span v-if="appVersion" class="app-version">v{{ appVersion }}</span>
+        </div>
+        <div v-if="user" class="signed-in">Signed in as {{ user.username }} ({{ user.role }})</div>
+      </div>
+      <div class="top-actions">
+        <button v-if="user" @click="openPreferences">Personalize</button>
+        <button v-if="user" @click="onLogout" :disabled="loginLoading">Logout</button>
+        <button v-else class="primary" @click="openLoginPrompt">Sign in</button>
+      </div>
+    </header>
+
+    <section class="search" v-if="user">
+      <div class="search-row">
+        <input
+          v-model.trim="q"
+          :disabled="loading"
+          type="search"
+          placeholder="Search title / author / subject..."
+          @keyup.enter="onSearch"
+        />
+        <button :disabled="loading" @click="onSearch">Search</button>
+        <button :disabled="loading || !q" @click="clearSearch">Clear</button>
+        <button @click="resetSort">Reset sort</button>
+        <button v-if="isAdmin" class="primary" @click="openAdd">+ Add Book</button>
+        <button v-if="isAdmin" @click="openCsvImport">Import CSV</button>
+        <button v-if="isAdmin" @click="onRebuildThumbs">Rebuild thumbs</button>
+        <a
+          v-if="isAdmin"
+          class="link-btn"
+          :href="exportCsvHref"
+          target="_blank"
+          rel="noopener"
+        >Export CSV</a>
+        <a
+          v-if="isAdmin"
+          class="link-btn"
+          :href="exportJsonHref"
+          target="_blank"
+          rel="noopener"
+        >JSON</a>
+        <a
+          v-if="isAdmin"
+          class="link-btn"
+          href="backup_full.php"
+          target="_blank"
+          rel="noopener"
+        >Full backup (ZIP)</a>
+        <button v-if="isAdmin" @click="openAuthorsMaintenance">Authors</button>
+        <button v-if="isAdmin" @click="openUserManagement">Users</button>
+        <button v-if="isAdmin" @click="openOrphanMaintenance">Orphan maintenance</button>
+        <button v-if="isAdmin" @click="openAuthLogs">Logs</button>
+      </div>
+    </section>
+
+    <section class="status" v-if="!user">
+      <p>Sign in to continue.</p>
+    </section>
+
+    <BookList
+      v-if="user"
+      :rows="rows"
+      :total="total"
+      :page="page"
+      :per-page="perPage"
+      :sort="sort"
+      :dir="dir"
+      :loading="loading"
+      :q="q"
+      :is-admin="isAdmin"
+      :columns="preferences"
+      @change-page="onChangePage"
+      @change-per-page="onChangePerPage"
+      @change-sort="onChangeSort"
+      @view="onView"
+      @edit="onEdit"
+      @duplicate="duplicateFrom"
+      @delete="onDelete"
+    />
+
+    <BookDetailModal
+      :open="showDetail"
+      :book="selectedBook"
+      @close="closeDetail"
+    />
+
+    <BookDialog
+      v-if="showDialog"
+      :mode="dialogMode"
+      :book="selected || {}"
+      :can-manage="isAdmin"
+      @close="onCloseDialog"
+      @switch-edit="onEdit"
+      @save="onSaveDialog"
+      @create="onCreateDialog"
+      @duplicate="duplicateFrom"
+    />
+
+    <CsvImportModal
+      v-if="showCsvImport"
+      @close="showCsvImport = false"
+      @imported="onCsvImported"
+    />
+
+    <OrphanMaintenance
+      v-if="showOrphanMaintenance"
+      @close="showOrphanMaintenance = false"
+    />
+    <AuthorsMaintenance
+      v-if="showAuthorsMaintenance"
+      @close="showAuthorsMaintenance = false"
+    />
+    <UserManagement
+      v-if="showUserManagement"
+      :current-user="user"
+      @close="showUserManagement = false"
+    />
+    <AuthLogsModal
+      v-if="showAuthLogs"
+      @close="showAuthLogs = false"
+    />
+
+    <PreferencesModal
+      v-if="showPreferences"
+      :preferences="preferences"
+      @close="showPreferences = false"
+      @saved="onPreferencesSaved"
+    />
+
+    <div v-if="rebuildThumbsBusy" class="busy-overlay" aria-live="polite">
+      <div class="busy-card">
+        <div class="spinner" aria-hidden="true"></div>
+        <div>
+          Rebuilding thumbnails…
+          <span v-if="rebuildThumbsTotal"> {{ rebuildThumbsDone }} / {{ rebuildThumbsTotal }}</span>
+          <span v-else> {{ rebuildThumbsDone }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showLoginModal" class="login-overlay">
+      <form class="login-card" @submit.prevent="onSubmitLogin">
+        <h2>Sign in</h2>
+        <label>
+          Username
+          <input
+            v-model.trim="loginForm.username"
+            :disabled="loginLoading"
+            type="text"
+            autocomplete="username"
+            autofocus
+          />
+        </label>
+        <label>
+          Password
+          <input
+            v-model="loginForm.password"
+            :disabled="loginLoading"
+            type="password"
+            autocomplete="current-password"
+          />
+        </label>
+        <div class="error" v-if="loginError">{{ loginError }}</div>
+        <div class="actions">
+          <button class="primary" type="submit" :disabled="loginLoading">
+            {{ loginLoading ? 'Signing in...' : 'Sign in' }}
+          </button>
+        </div>
+        <div class="hint">Admin role required for data changes.</div>
+      </form>
+    </div>
+
+    <div v-if="needsPasswordChange" class="login-overlay">
+      <div class="login-card force-card">
+        <h2>Update your password</h2>
+        <ChangePassword :force="true" @changed="onForcedPasswordChanged" />
+      </div>
+    </div>
+  </main>
+</template>
+
+<script setup lang="js">
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import BookDetailModal from "./components/BookDetailModal.vue";
+import BookDialog from "./components/BookDialog.vue";
+import BookList from "./components/BookList.vue";
+import CsvImportModal from "./components/CsvImportModal.vue";
+import OrphanMaintenance from "./components/OrphanMaintenance.vue";
+import AuthorsMaintenance from "./components/AuthorsMaintenance.vue";
+import UserManagement from "./components/UserManagement.vue";
+import AuthLogsModal from "./components/AuthLogsModal.vue";
+import PreferencesModal from "./components/PreferencesModal.vue";
+import ChangePassword from "./components/ChangePassword.vue";
+import {
+  addBook,
+  deleteBook,
+  fetchBook,
+  fetchBooks,
+  fetchUserPreferences,
+  updateBook,
+  updateUserPreferences,
+  assetUrl,
+  apiUrl,
+} from "./api";
+import { useAuth } from "./composables/useAuth";
+import pkg from "../package.json";
+
+const rows = ref([]);
+const total = ref(0);
+const page = ref(1);
+const perPage = ref(25);
+const perPageSource = ref("default");
+const sort = ref("title");
+const dir = ref("asc");
+const q = ref("");
+const loading = ref(false);
+const ignorePopStateOnce = ref(false);
+const showDetail = ref(false);
+const selectedBook = ref(null);
+const showDialog = ref(false);
+const dialogMode = ref("view");
+const selected = ref(null);
+const appVersion = pkg.version ? `${pkg.version} (installer build)` : "";
+const showCsvImport = ref(false);
+const showOrphanMaintenance = ref(false);
+const showAuthorsMaintenance = ref(false);
+const showUserManagement = ref(false);
+const showAuthLogs = ref(false);
+const showPreferences = ref(false);
+const rebuildThumbsBusy = ref(false);
+const rebuildThumbsDone = ref(0);
+const rebuildThumbsTotal = ref(0);
+const rebuildThumbsUpdated = ref(0);
+const rebuildThumbsErrors = ref(0);
+const rebuildThumbsErrorList = ref([]);
+const preferences = ref({
+  logo_url: null,
+  bg_color: null,
+  fg_color: null,
+  text_size: "medium",
+  per_page: 25,
+  show_cover: true,
+  show_subtitle: true,
+  show_series: true,
+  show_is_hungarian: true,
+  show_publisher: true,
+  show_year: true,
+  show_status: true,
+  show_placement: true,
+  show_isbn: false,
+  show_loaned_to: false,
+  show_loaned_date: false,
+  show_subjects: false,
+});
+
+const onUnauthorized = () => {
+  rows.value = [];
+  total.value = 0;
+  showDetail.value = false;
+  selectedBook.value = null;
+  showDialog.value = false;
+  selected.value = null;
+};
+
+const {
+  user,
+  showLoginModal,
+  loginForm,
+  loginLoading,
+  loginError,
+  initAuth,
+  fetchCurrentUser,
+  handleUnauthorized,
+  openLoginPrompt,
+  onSubmitLogin,
+  onLogout,
+} = useAuth({ onUnauthorized });
+
+const needsPasswordChange = computed(() => !!user.value?.force_password_change);
+
+const onForcedPasswordChanged = async () => {
+  await fetchCurrentUser();
+};
+const logoUrl = computed(() => {
+  const raw = preferences.value?.logo_url;
+  return raw ? assetUrl(raw) : "";
+});
+
+const isAdmin = computed(() => {
+  const role = user.value && user.value.role ? String(user.value.role).toLowerCase() : "";
+  return role === "admin";
+});
+
+const exportCsvHref = computed(() => {
+  const p = new URLSearchParams();
+  if (q.value) p.set("q", q.value);
+  return `export_books_csv.php${p.toString() ? "?" + p.toString() : ""}`;
+});
+
+const exportJsonHref = computed(() => {
+  const p = new URLSearchParams();
+  if (q.value) p.set("q", q.value);
+  return `export_books_json.php${p.toString() ? "?" + p.toString() : ""}`;
+});
+
+const ensureAdmin = () => {
+  if (!isAdmin.value) {
+    alert("Admin access required");
+    return false;
+  }
+  return true;
+};
+
+const DEFAULT_THEME = {
+  bg: "#f6e09f",
+  fg: "#222222",
+  btnBg: "#f9f3d4",
+  btnBorder: "#ccb66b",
+  primaryBg: "#2a72d4",
+  primaryBorder: "#2a72d4",
+  primaryText: "#ffffff",
+};
+
+const normalizeHex = (value) => {
+  if (!value) return null;
+  const raw = String(value).trim();
+  const match = raw.match(/^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
+  if (!match) return null;
+  let hex = match[1];
+  if (hex.length === 3) {
+    hex = hex.split("").map((ch) => ch + ch).join("");
+  }
+  return `#${hex.toLowerCase()}`;
+};
+
+const hexToRgb = (hex) => {
+  const normalized = normalizeHex(hex);
+  if (!normalized) return null;
+  const value = normalized.slice(1);
+  return [
+    parseInt(value.slice(0, 2), 16),
+    parseInt(value.slice(2, 4), 16),
+    parseInt(value.slice(4, 6), 16),
+  ];
+};
+
+const clamp = (value) => Math.max(0, Math.min(255, Math.round(value)));
+
+const blendRgb = (base, target, amount) => ([
+  clamp(base[0] + (target[0] - base[0]) * amount),
+  clamp(base[1] + (target[1] - base[1]) * amount),
+  clamp(base[2] + (target[2] - base[2]) * amount),
+]);
+
+const rgbToHex = (rgb) => `#${rgb.map((c) => c.toString(16).padStart(2, "0")).join("")}`;
+const luminance = (rgb) => (0.2126 * rgb[0]) + (0.7152 * rgb[1]) + (0.0722 * rgb[2]);
+
+const applyPreferences = (prefs) => {
+  const bg = normalizeHex(prefs?.bg_color) || DEFAULT_THEME.bg;
+  const fg = normalizeHex(prefs?.fg_color) || DEFAULT_THEME.fg;
+  const size = prefs?.text_size || "medium";
+  const sizeMap = { small: "13px", medium: "15px", large: "17px" };
+  document.documentElement.style.setProperty("--app-bg", bg);
+  document.documentElement.style.setProperty("--app-fg", fg);
+  document.documentElement.style.setProperty("--panel-bg", bg);
+  document.documentElement.style.setProperty("--app-font-size", sizeMap[size] || "15px");
+
+  const bgRgb = hexToRgb(bg);
+  if (bgRgb) {
+    const btnBg = rgbToHex(blendRgb(bgRgb, [255, 255, 255], 0.22));
+    const btnBorder = rgbToHex(blendRgb(bgRgb, [0, 0, 0], 0.22));
+    const primaryRgb = blendRgb(bgRgb, [0, 0, 0], 0.35);
+    const primaryBorder = rgbToHex(blendRgb(bgRgb, [0, 0, 0], 0.5));
+    const primaryText = luminance(primaryRgb) < 140 ? "#ffffff" : fg;
+    document.documentElement.style.setProperty("--btn-bg", btnBg);
+    document.documentElement.style.setProperty("--btn-border", btnBorder);
+    document.documentElement.style.setProperty("--btn-text", fg);
+    document.documentElement.style.setProperty("--btn-primary-bg", rgbToHex(primaryRgb));
+    document.documentElement.style.setProperty("--btn-primary-border", primaryBorder);
+    document.documentElement.style.setProperty("--btn-primary-text", primaryText);
+  } else {
+    document.documentElement.style.setProperty("--btn-bg", DEFAULT_THEME.btnBg);
+    document.documentElement.style.setProperty("--btn-border", DEFAULT_THEME.btnBorder);
+    document.documentElement.style.setProperty("--btn-text", DEFAULT_THEME.fg);
+    document.documentElement.style.setProperty("--btn-primary-bg", DEFAULT_THEME.primaryBg);
+    document.documentElement.style.setProperty("--btn-primary-border", DEFAULT_THEME.primaryBorder);
+    document.documentElement.style.setProperty("--btn-primary-text", DEFAULT_THEME.primaryText);
+  }
+};
+
+const resetPreferences = () => {
+  const defaults = {
+    logo_url: null,
+    bg_color: null,
+    fg_color: null,
+    text_size: "medium",
+    per_page: 25,
+    show_cover: true,
+    show_subtitle: true,
+    show_series: true,
+    show_is_hungarian: true,
+    show_publisher: true,
+    show_year: true,
+    show_status: true,
+    show_placement: true,
+    show_isbn: false,
+    show_loaned_to: false,
+    show_loaned_date: false,
+    show_subjects: false,
+  };
+  preferences.value = defaults;
+  applyPreferences(defaults);
+  perPage.value = 25;
+  perPageSource.value = "default";
+  page.value = 1;
+};
+
+const loadPreferences = async () => {
+  try {
+    const res = await fetchUserPreferences();
+    const prefs = res?.data?.preferences || null;
+    if (prefs) {
+      preferences.value = { ...preferences.value, ...prefs };
+      applyPreferences(preferences.value);
+      if (perPageSource.value === "default" && prefs.per_page) {
+        perPage.value = prefs.per_page;
+      }
+    }
+  } catch (err) {
+    console.warn("Preferences load failed", err);
+  }
+};
+
+const reload = async () => {
+  if (!user.value) return;
+  loading.value = true;
+  try {
+    const resp = await fetchBooks({
+      q: q.value || undefined,
+      page: page.value,
+      per: perPage.value,
+      sort: sort.value,
+      dir: dir.value,
+    });
+
+    const data = resp && Array.isArray(resp.data) ? resp.data : [];
+    const meta = resp && resp.meta ? resp.meta : {};
+
+    rows.value = data;
+    total.value = Number.isFinite(meta.total) ? meta.total : 0;
+    page.value = Number.isFinite(meta.page) ? meta.page : 1;
+    perPage.value = Number.isFinite(meta.per_page) ? meta.per_page : perPage.value;
+
+    if (!ignorePopStateOnce.value) {
+      const p = new URLSearchParams();
+      if (q.value) p.set("q", q.value);
+      if (page.value !== 1) p.set("page", String(page.value));
+      if (perPage.value !== 25) p.set("per_page", String(perPage.value));
+      if (sort.value !== "id") p.set("sort", sort.value);
+      if (dir.value !== "desc") p.set("dir", dir.value);
+      const s = p.toString();
+      window.history.replaceState(null, "", `${window.location.pathname}${s ? "?" + s : ""}`);
+    } else {
+      ignorePopStateOnce.value = false;
+    }
+  } catch (err) {
+    if (err && err.status === 401) {
+      handleUnauthorized();
+    } else {
+      console.error("Reload failed", err);
+    }
+  } finally {
+    loading.value = false;
+  }
+};
+
+const applyUrlParams = () => {
+  const p = new URLSearchParams(window.location.search);
+  if (p.has("q")) q.value = p.get("q") || "";
+  if (p.has("page")) page.value = Math.max(1, parseInt(p.get("page") || "1", 10) || 1);
+  if (p.has("per_page")) {
+    perPage.value = Math.max(1, parseInt(p.get("per_page") || "25", 10) || 25);
+    perPageSource.value = "url";
+  }
+  if (p.has("sort")) sort.value = p.get("sort") || "id";
+  if (p.has("dir")) dir.value = (p.get("dir") || "desc").toLowerCase() === "asc" ? "asc" : "desc";
+};
+
+const onPopState = () => {
+  const sp = new URLSearchParams(location.search);
+  ignorePopStateOnce.value = true;
+  q.value = sp.get("q") || "";
+  page.value = Math.max(1, parseInt(sp.get("page") || "1", 10) || 1);
+  perPage.value = Math.max(1, parseInt(sp.get("per_page") || "25", 10) || 25);
+  perPageSource.value = "url";
+  sort.value = sp.get("sort") || "id";
+  dir.value = (sp.get("dir") || "desc").toLowerCase() === "asc" ? "asc" : "desc";
+  reload();
+};
+
+const onSearch = () => {
+  page.value = 1;
+  reload();
+};
+
+const clearSearch = () => {
+  q.value = "";
+  page.value = 1;
+  reload();
+};
+
+const onChangePage = (newPage) => {
+  if (newPage === page.value) return;
+  page.value = newPage;
+  reload();
+};
+
+const onChangePerPage = (newPer) => {
+  const n = parseInt(newPer, 10) || 25;
+  if (n === perPage.value) return;
+  perPage.value = n;
+  perPageSource.value = "user";
+  page.value = 1;
+  if (user.value) {
+    updateUserPreferences({ per_page: n }).catch((err) => {
+      console.warn("Per-page save failed", err);
+    });
+    preferences.value = { ...preferences.value, per_page: n };
+  }
+  reload();
+};
+
+const onChangeSort = ({ sort: newSort, dir: newDir }) => {
+  sort.value = newSort;
+  dir.value = newDir;
+  reload();
+};
+
+const resetSort = () => {
+  sort.value = "title";
+  dir.value = "asc";
+  page.value = 1;
+  reload();
+};
+
+const loadFullBook = async (book) => {
+  const id = book?.id || book?.book_id;
+  if (!id) return book;
+  const res = await fetchBook(id);
+  return res && res.data ? res.data : book;
+};
+
+const onView = async (book) => {
+  showDetail.value = true;
+  selectedBook.value = null;
+  try {
+    selectedBook.value = await loadFullBook(book);
+  } catch (err) {
+    if (err && err.status === 401) {
+      handleUnauthorized();
+      return;
+    }
+    selectedBook.value = book;
+    alert("Could not load full book details. Showing list data.");
+  }
+};
+
+const closeDetail = () => {
+  showDetail.value = false;
+  selectedBook.value = null;
+};
+
+const onEdit = async (book) => {
+  if (!ensureAdmin()) return;
+  try {
+    selected.value = await loadFullBook(book);
+  } catch (err) {
+    if (err && err.status === 401) {
+      handleUnauthorized();
+      return;
+    }
+    selected.value = book;
+    alert("Could not load full book details. Editing list data.");
+  }
+  dialogMode.value = "edit";
+  showDialog.value = true;
+};
+
+const openCsvImport = () => {
+  if (!ensureAdmin()) return;
+  showCsvImport.value = true;
+};
+
+const openOrphanMaintenance = () => {
+  if (!ensureAdmin()) return;
+  showOrphanMaintenance.value = true;
+};
+
+const openAuthorsMaintenance = () => {
+  if (!ensureAdmin()) return;
+  showAuthorsMaintenance.value = true;
+};
+
+const openUserManagement = () => {
+  if (!ensureAdmin()) return;
+  showUserManagement.value = true;
+};
+
+const openAuthLogs = () => {
+  if (!ensureAdmin()) return;
+  showAuthLogs.value = true;
+};
+
+const openPreferences = () => {
+  if (!user.value) return;
+  showPreferences.value = true;
+};
+
+const onPreferencesSaved = (prefs) => {
+  preferences.value = { ...preferences.value, ...prefs };
+  applyPreferences(preferences.value);
+  if (prefs?.per_page) {
+    perPage.value = prefs.per_page;
+    perPageSource.value = "user";
+    if (user.value) reload();
+  }
+};
+
+const openAdd = () => {
+  if (!ensureAdmin()) return;
+  selected.value = null;
+  dialogMode.value = "create";
+  showDialog.value = true;
+};
+
+const duplicateFrom = (book) => {
+  if (!ensureAdmin()) return;
+  const seed = {
+    title: book.title || "",
+    subtitle: book.subtitle || "",
+    series: book.series || "",
+    year_published: book.year_published ?? null,
+    isbn: "",
+    authors: book.authors || "",
+    authors_hu_flag: book.authors_hu_flag ?? null,
+    publisher: book.publisher || "",
+    publisher_id: book.publisher_id ?? null,
+  };
+  selected.value = seed;
+  dialogMode.value = "create";
+  showDialog.value = true;
+};
+
+const onCloseDialog = () => {
+  showDialog.value = false;
+  selected.value = null;
+};
+
+const onSaveDialog = async (updated) => {
+  if (!ensureAdmin()) return;
+  try {
+    await updateBook(updated);
+    onCloseDialog();
+    await reload();
+  } catch (e) {
+    if (e && e.status === 401) {
+      handleUnauthorized();
+      return;
+    }
+    alert(`Update failed: ${e.message}`);
+  }
+};
+
+const onCreateDialog = async (payload) => {
+  if (!ensureAdmin()) return;
+  try {
+    const res = await addBook(payload);
+    alert(res.message || "Book created.");
+    onCloseDialog();
+    await reload();
+  } catch (e) {
+    if (e && e.status === 401) {
+      handleUnauthorized();
+      return;
+    }
+    alert(`Create failed: ${e.message}`);
+  }
+};
+
+const onCsvImported = async (payload) => {
+  await reload();
+  if (!payload?.id_conflicts?.length) {
+    showCsvImport.value = false;
+  }
+};
+
+const onDelete = async (book) => {
+  if (!ensureAdmin()) return;
+  const id = typeof book === "object" ? (book?.id ?? book?.book_id) : book;
+  const loaned_to = book?.loaned_to ? String(book.loaned_to).trim() : "";
+  const loaned_date = book?.loaned_date ? String(book.loaned_date).trim() : "";
+  const loaned = !!(loaned_to || loaned_date);
+  let msg = `Delete book #${id}?`;
+  if (loaned) {
+    const parts = [];
+    if (loaned_to) parts.push(`to ${loaned_to}`);
+    if (loaned_date) parts.push(`on ${loaned_date}`);
+    const extra = parts.length ? ` (${parts.join(" ")})` : "";
+    msg = `Delete book #${id}? Book is loaned and not in collection${extra}.`;
+  }
+  if (!confirm(msg)) return;
+  try {
+    await deleteBook(id);
+    await reload();
+  } catch (e) {
+    if (e && e.status === 401) {
+      handleUnauthorized();
+      return;
+    }
+    alert("Delete failed. See console.");
+    console.error(e);
+  }
+};
+
+const runThumbRebuild = async ({ limitOverride = null } = {}) => {
+  rebuildThumbsDone.value = 0;
+  rebuildThumbsTotal.value = 0;
+  rebuildThumbsUpdated.value = 0;
+  rebuildThumbsErrors.value = 0;
+  rebuildThumbsErrorList.value = [];
+
+  const batchSize = 10;
+  let offset = 0;
+  const limit = limitOverride ?? batchSize;
+  while (true) {
+    const params = new URLSearchParams({
+      re: "1",
+      h: "200",
+      limit: String(limit),
+      offset: String(offset),
+    });
+    const url = apiUrl(`rebuild_thumbs.php?${params.toString()}`);
+    const res = await fetch(url, { credentials: "same-origin" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) throw new Error(data.error || "Rebuild failed");
+    const payload = data?.data || {};
+    const scanned = payload.scanned ?? 0;
+    const updated = payload.updated ?? 0;
+    const total = payload.total_dirs ?? 0;
+    const errors = Array.isArray(payload.errors) ? payload.errors : [];
+
+    if (!rebuildThumbsTotal.value && total) rebuildThumbsTotal.value = total;
+    rebuildThumbsDone.value += scanned;
+    rebuildThumbsUpdated.value += updated;
+    if (errors.length) {
+      rebuildThumbsErrors.value += errors.length;
+      rebuildThumbsErrorList.value.push(...errors);
+    }
+
+    if (scanned <= 0) break;
+    if (total && rebuildThumbsDone.value >= total) break;
+    offset += batchSize;
+  }
+};
+
+const onRebuildThumbs = async () => {
+  if (!ensureAdmin()) return;
+  if (!confirm("Rebuild cover thumbnails now?")) return;
+  rebuildThumbsBusy.value = true;
+  try {
+    await runThumbRebuild({ limitOverride: 10 });
+
+    let msg = [
+      `Scanned: ${rebuildThumbsDone.value}`,
+      `Updated: ${rebuildThumbsUpdated.value}`,
+      `Errors: ${rebuildThumbsErrors.value}`,
+    ].filter(Boolean).join("\n");
+    if (rebuildThumbsErrorList.value.length) {
+      const max = 10;
+      const list = rebuildThumbsErrorList.value.slice(0, max);
+      const more = rebuildThumbsErrorList.value.length > max
+        ? `\n...and ${rebuildThumbsErrorList.value.length - max} more`
+        : "";
+      msg += `\n\nError details:\n- ${list.join("\n- ")}${more}`;
+    }
+    alert(msg || "Rebuild completed.");
+  } catch (err) {
+    alert(err && err.message ? err.message : "Rebuild failed.");
+  } finally {
+    rebuildThumbsBusy.value = false;
+  }
+};
+
+onMounted(async () => {
+  applyUrlParams();
+  await initAuth();
+  applyPreferences(preferences.value);
+  window.addEventListener("popstate", onPopState);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("popstate", onPopState);
+});
+
+watch(user, async (next, prev) => {
+  if (next && !prev) {
+    await loadPreferences();
+    reload();
+  } else if (!next) {
+    resetPreferences();
+  }
+});
+</script>
+
+<style>
+* { box-sizing: border-box; }
+
+:root {
+  --app-bg: #f6e09f;
+  --app-fg: #222222;
+  --app-font-size: 15px;
+  --panel-bg: var(--app-bg);
+  --line: rgba(0,0,0,0.15);
+  --btn-bg: #f9f3d4;
+  --btn-border: #ccb66b;
+  --btn-text: #222222;
+  --btn-primary-bg: #2a72d4;
+  --btn-primary-border: #2a72d4;
+  --btn-primary-text: #ffffff;
+}
+
+body {
+  margin: 0;
+  font-family: "Trebuchet MS", "Verdana", "Arial", sans-serif;
+  font-size: var(--app-font-size);
+  background: var(--app-bg);
+  color: var(--app-fg);
+}
+
+.container {
+  max-width: min(1850px, 96vw);
+  margin: 0 auto;
+  padding: 0.8rem 1rem 1.25rem;
+}
+
+.topbar {
+  display: grid;
+  grid-template-columns: 120px 1fr 260px;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.6rem;
+}
+
+.logo-slot img {
+  max-width: 96px;
+  max-height: 96px;
+  object-fit: contain;
+  display: block;
+}
+
+.title-slot {
+  text-align: center;
+}
+
+.brand-title {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.app-version {
+  font-size: 0.75em;
+  font-weight: 600;
+  color: rgba(0,0,0,0.6);
+  margin-left: 0.35rem;
+}
+
+.signed-in {
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.top-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.search {
+  margin-bottom: 0.75rem;
+}
+
+.search-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.search input {
+  padding: 0.35rem 0.55rem;
+  min-width: 260px;
+  border: 1px solid var(--btn-border);
+  border-radius: 6px;
+  background: #fff;
+}
+
+button,
+.link-btn {
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+  border: 1px solid var(--btn-border);
+  border-radius: 8px;
+  background: var(--btn-bg);
+  color: var(--btn-text);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+button.primary {
+  background: var(--btn-primary-bg);
+  border-color: var(--btn-primary-border);
+  color: var(--btn-primary-text);
+}
+
+button.ghost,
+.link-btn.ghost {
+  background: transparent;
+}
+
+.status {
+  padding: 0.75rem 1rem;
+  background: var(--panel-bg);
+  border-radius: 10px;
+}
+
+.login-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2500;
+}
+
+.login-card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 1.5rem;
+  width: min(360px, 92vw);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.force-card {
+  width: min(520px, 92vw);
+}
+.force-card .pw-section {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.login-card h2 {
+  margin: 0;
+}
+
+.login-card label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.9rem;
+  gap: 0.3rem;
+}
+
+.login-card input {
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--btn-border);
+  border-radius: 6px;
+}
+
+.login-card .actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.login-card .error {
+  color: #c0392b;
+  font-size: 0.9rem;
+}
+
+.login-card .hint {
+  font-size: 0.8rem;
+  color: #666;
+  text-align: center;
+}
+
+.busy-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.25);
+  display: grid;
+  place-items: center;
+  z-index: 2600;
+}
+
+.busy-card {
+  background: #fff;
+  padding: 0.9rem 1.2rem;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.2);
+  border: 1px solid rgba(0,0,0,0.1);
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #c9c9c9;
+  border-top-color: #2a72d4;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 900px) {
+  .topbar {
+    grid-template-columns: 1fr;
+    text-align: center;
+  }
+  .logo-slot {
+    display: flex;
+    justify-content: center;
+  }
+  .top-actions {
+    justify-content: center;
+  }
+  .title-slot {
+    order: 2;
+  }
+}
+</style>

@@ -1,0 +1,984 @@
+📚 BookCatalog – Rebuild, Images & QC
+
+This repository contains a fully automated, reproducible pipeline to:
+	•	rebuild the BookCatalog MySQL schema and load stage data,
+	•	map normalized cover images to books,
+	•	copy images into the web app’s public/uploads/<book_id>/ tree,
+	•	keep DB ↔ disk in sync, and
+	•	generate QC reports.
+
+All steps are idempotent and can be re-run at any time.
+
+⸻
+
+Architecture Overview
+
+The BookCatalog application follows a simple, explicit architecture, optimized for long-term maintainability and data integrity rather than complexity.
+
+High-level components
++-------------------+
+|   Web Browser     |
+|  (Admin / Reader) |
++---------+---------+
+          |
+          v
++-------------------+
+|  PHP Application  |
+|  (public/)        |
+|  - routing        |
+|  - auth           |
+|  - backup logic   |
++---------+---------+
+          |
+          v
++-------------------+
+|     MySQL DB      |
+|   (bpbooks)       |
++-------------------+
+
+Filesystem:
+- public/uploads/        → cover images
+- 00-basedata/           → SQL helpers, scripts, QC reports
+- ~/bin/                 → operational & backup scripts
+
+Backend
+	•	Implemented in PHP
+	•	Handles:
+	•	authentication and authorization
+	•	catalog CRUD operations
+	•	backup orchestration
+	•	All security-sensitive logic (auth, role checks, backup access) is enforced server-side
+
+Database
+	•	MySQL database (bpbooks)
+	•	Authoritative source for:
+	•	book metadata
+	•	user accounts and roles
+	•	Backed up independently via mysqldump
+
+Frontend
+	•	Frontend source lives under frontend/
+	•	Built artifacts are deployed to public/dist
+	•	Build output is not part of backups (rebuildable)
+
+Static assets
+	•	Book cover images are stored in:
+	public/uploads/
+	•	These are considered data, not build artifacts, and are always backed up
+
+Operational tooling
+	•	Backup and maintenance scripts live in:
+	~/bin/
+	
+Release & Versioning Policy
+
+The BookCatalog project uses a lightweight, pragmatic versioning model.
+
+Versioning scope
+
+Versioning applies primarily to:
+	•	database schema changes
+	•	backend logic changes
+	•	data import/export processes
+	•	backup format changes
+
+Frontend-only changes may be versioned implicitly with the application.
+
+Recommended version format
+	MAJOR.MINOR.PATCH
+
+	•	MAJOR – incompatible changes (schema changes, auth model changes)
+	•	MINOR – backward-compatible feature additions
+	•	PATCH – bug fixes, small improvements
+	Example:
+	1.2.0 → new catalog feature
+	1.2.1 → bug fix
+	2.0.0 → schema or auth change
+
+Database changes
+	•	Database schema changes should be:
+	•	scripted (SQL files)
+	•	stored under 00-basedata/sql/
+	•	Any schema change should be documented briefly in the README or a CHANGELOG
+
+Releases
+
+A release typically consists of:
+	1.	Updated application source
+	2.	Updated database schema (if applicable)
+	3.	Updated README (if operational behavior changed)
+	4.	A successful backup test
+
+Releases do not require:
+	•	rebuilding historical backups
+	•	modifying existing data unless explicitly required
+
+Backward compatibility
+	•	Existing backups must remain restorable
+	•	If backup format or restore procedure changes, the README must be updated accordingly
+
+Operational rule
+
+If a future restore requires guesswork, the release is incomplete.
+
+⚙️ Requirements
+	•	macOS or Linux
+	•	Bash 4+ (5+ recommended)
+	•	MySQL 8.x (with local_infile=ON)
+	•	jq (optional, for JSON inspection)
+
+Normalized cover corpus in normalized_covers/ with filenames like:
+
+normalized_covers/00001_cover.jpg
+normalized_covers/00002_cover.jpg
+
+Web uploads directory used by the app:
+
+public/uploads/<book_id>/cover.jpg
+public/uploads/<book_id>/cover-thumb.jpg
+
+Optional environment variables
+You may export these before running the pipeline:
+
+export PROJECT_ROOT=~/Projects/BookCatalog
+export DB=bpbooks
+export USER=bajanp
+export UPLOADS="$PROJECT_ROOT/public/uploads"
+export SRC=/Users/bajanp/Downloads/add-images-to-db/normalized_covers
+export PIPELINE=sql   # or 'legacy'
+
+Defaults live in scripts/env.sh (PROJECT_ROOT, BASEDATA_ROOT, ROOT, UPLOADS).
+Override any of them by exporting before you run the scripts.
+
+Passwords: the scripts honor $MYSQL_PWD if exported; 
+otherwise you’ll be prompted once at start and the value is reused by child scripts.
+
+⸻
+
+📂 Repository Layout
+
+scripts/
+  00_gen_normalized_list.sh
+  10_rebuild_db.sh
+  20_load_norm_files_and_map_sql.sh
+  30_clean_uploads.sh
+  40_copy_covers_from_map.sh
+  45_sync_db_to_disk.sh
+  47_safe_prune_map.sh
+  50_qc.sh
+  run_all.sh
+
+sql/
+  00_rebuild_schema.sql
+  10_load_stage.sql
+  20_merge_books_publishers.sql
+  30_merge_authors_and_links.sql
+  40_build_img_map_and_update.sql
+  50_sanity_checks.sql
+
+normalized_covers/                # image corpus (input)
+normalized_filenames.txt          # generated by step 00
+public/uploads/                   # web app output tree
+
+🚀 Quickstart
+
+Full rebuild (schema + stage + merge + mapping + copy + QC)
+
+./scripts/run_all.sh full
+
+Covers-only pass (keep DB, redo mapping → copy → QC)
+
+./scripts/run_all.sh covers
+
+🔄 Pipeline Overview
+
+The run_all.sh orchestrates these steps:
+
+00 — Generate normalized_filenames.txt
+Script: 00_gen_normalized_list.sh
+	•	Scans normalized_covers/
+	•	Extracts *_cover.jpg filenames
+	•	Writes a sorted list to normalized_filenames.txt
+	•	Used later for bulk SQL loading
+
+Scans normalized_covers/, extracts *_cover.jpg entries, writes a sorted list for bulk SQL load.
+
+10 — Rebuild DB schema & import stage data (FULL mode only)
+Script: 10_rebuild_db.sh
+	•	Recreates schema
+	•	Loads stage tables
+	•	Merges Books, Publishers, Authors, Book↔Author Links
+	•	Calculates any helper keys (e.g., csv_book_id)
+
+20 — Load normalized names & build tmp_img_map (preferred “sql” pipeline)
+Script: 20_load_norm_files_and_map_sql.sh
+	•	Creates/truncates tmp_norm_files
+	•	LOAD DATA from normalized_filenames.txt
+	•	Builds tmp_img_map via:
+	•	direct csv_book_id → csv_id
+	•	single-occurrence title matches
+	•	unique (title, publisher) matches
+	•	Preps DB for clean copy:
+			Books.cover_image = uploads/<book_id>/cover.jpg
+			Books.cover_thumb = uploads/<book_id>/cover.jpg (temporary until real thumbs exist)
+This is the preferred, deterministic SQL-centric pipeline.
+
+47 — Safe prune map to disk reality
+Script: 47_safe_prune_map.sh
+	•	Scans actual files on disk
+	•	Builds tmp_have_file from actual files
+	•	Removes from tmp_img_map any mapping without an on-disk file
+🛡️ Guarantees:
+	•	Nothing is deleted from disk
+	•	The mapping table remains trustworthy
+
+45 — Sync DB cover fields to disk
+Script: 45_sync_db_to_disk.sh
+	•	Sets cover_* = NULL for books without files
+	•	Re-stamps cover_* for books with files
+(Ensures DB reflects reality after prune)
+
+30 — Clean uploads
+Script: 30_clean_uploads.sh
+	•	Clears public/uploads/ to start copying cleanly
+	•	Ensures copying starts from a clean state
+
+40 — Copy covers
+Script: 40_copy_covers_from_map.sh
+	•	Copies normalized_covers/<pad>_cover.jpg → public/uploads/<book_id>/cover.jpg
+	•	(Thumbnails handled by PHP utilities below)
+Thumbnails are handled separately by PHP utilities
+
+50 — QC (reports saved to ~/Downloads/)
+Script: 50_qc.sh
+
+Produces on-screen stats and saves reports to ~/Downloads/:
+Outputs:
+	•	totals (DB books, mapped rows, files on disk, with covers)
+	•	orphan_files.txt (files with no matching book)
+	•	books_missing_covers.tsv
+	•	mapped_without_file.txt (mapped but file missing)
+	•	top_publishers_missing.tsv (publishers with most missing covers)
+	•	top_single_title_missing.tsv (unique titles still missing covers)
+
+⸻
+
+🖼️ Cover Images & Thumbnails
+
+The app and scripts use deterministic filenames:
+
+public/uploads/<book_id>/cover.jpg
+public/uploads/<book_id>/cover-thumb.jpg
+
+Any legacy cover-<random>.* names are normalized automatically.
+
+PHP utilities (run from repo root)
+
+Image backend
+Imagick is preferred; GD is used as a fallback.
+
+1) Generate thumbnails (downscale only; no upscaling)
+
+php public/generate_thumbs.php --height=240          # default 240px tall thumbs
+php public/generate_thumbs.php --height=200 --force  # rebuild even if thumb exists
+php public/generate_thumbs.php --dry-run             # preview actions
+
+2) Normalize covers (rename legacy → deterministic + update DB)
+Renames any cover-<hash>.* → cover.* (and thumbs likewise),
+updates Books.cover_image and Books.cover_thumb, and cleans leftovers.
+
+# CLI
+php public/normalize_covers.php --dry-run
+php public/normalize_covers.php --re               # force re-thumb
+php public/normalize_covers.php --h=240            # custom thumb height
+php public/normalize_covers.php --dry-run --h=200
+
+# Browser
+http://localhost/normalize_covers.php?dry=0&re=1&h=240
+
+3) Rebuild thumbs for everything (slow & sure)
+
+# Browser (example; limit=0 means “no limit”)
+http://localhost/rebuild_thumbs.php?limit=0&h=240&re=1
+
+Notes
+	•	Thumbs are only downscaled. If a cover is already ≤ requested size, it’s copied as-is.
+	•	“Normalize” does not change image dimensions—only filenames and DB paths.
+	•	Uploads via the UI now overwrite to the deterministic names and regenerate the thumb.
+
+⸻
+
+🔧 App Endpoints (selected)
+	•	backup_full.php – creates a ZIP with JSON/CSVs + uploads/ subset and a checksum manifest
+	•	export_books_csv.php, export_books_json.php – flat exports
+	•	import_csv.php – CSV import (title;subtitle;year_published;authors)
+	•	list_books.php – paginated/searchable list API (authors now include multiple names; order via Books_Authors.author_ord)
+	•	addBook.php, update_book.php, delete_book.php – CRUD
+	•	upload_image.php, delete_image.php – cover image ops (deterministic filenames)
+
+⸻
+
+🧪 CSV Import (frontend or curl)
+
+CSV shape:
+
+title;subtitle;year_published;authors
+Teszt könyv 01;Subtitle A;2024;Beke Albert
+Teszt könyv 05;Multi author;1950;J. S. Bach; Albert Schweitzer
+Teszt könyv 06;Empty year;;Author One; Author Two
+…
+
+	•	Separator: ;
+	•	Authors last (important). Multiple authors may be separated by ; or ,
+	•	Empty fields allowed (year is stored as NULL, not 0)
+
+Endpoints:
+
+# Dry run
+curl -s -F 'file=@/path/to/file.csv' -F 'dry_run=1' http://localhost/import_csv.php
+
+# Import
+curl -s -F 'file=@/path/to/file.csv' -F 'dry_run=0' http://localhost/import_csv.php
+
+🩺 Troubleshooting
+
+Empty UI, but API returns rows
+	Update the Vue templates to reflect any schema changes or new fields. The JSON is source of truth.
+
+LOAD DATA LOCAL fails
+	Enable in MySQL configs:
+
+	[mysqld]
+	local_infile=ON
+
+	[client]
+	local_infile=ON
+
+Permissions
+	Ensure the web process can read/write uploads:
+
+	chmod -R u+rw public/uploads
+
+Books with covers ≠ files on disk ≠ map entries?
+
+	Run, in order:
+	1.	47_safe_prune_map.sh
+	2.	45_sync_db_to_disk.sh
+	3.	50_qc.sh
+
+✅ Status
+	•	Deterministic and repeatable
+	•	Safe to re-run
+	•	DB and disk always converge to a consistent state
+	•	Rich QC artifacts after every run
+
+🧹 Temporary / Work Tables
+
+The following tables are pipeline artifacts only and may be dropped at any time:
+	•	tmp_*
+	•	stage_*
+
+They are recreated automatically by rebuild, mapping, or QC scripts and are not part of the authoritative dataset.
+
+To remove all work tables safely:
+	mysql bpbooks < sql/cleanup_work_tables.sql
+
+✅ Restore plan — validated
+
+Restore flow is correct and sound:
+	1.	Backup old public/uploads/
+	2.	Restore uploads from catalog backup
+	3.	Import full mysqldump (drops & recreates tables)
+	4.	Restart DB (optional but clean)
+	5.	Run 50_qc.sh
+
+💡 And now, optionally:
+	Run cleanup_work_tables.sql if you want a pristine DB
+
+✅ Backup
+
+The BookCatalog project uses two complementary backup strategies, serving different recovery scenarios.
+
+1) Data Backup (Database – authoritative source)
+
+The database is backed up independently using a dedicated script.
+This guarantees that the entire catalog data can be recreated 100%, regardless of application state.
+
+Script
+	~/bin/backup_bpbooks.sh
+
+What it does
+	•	Creates a compressed mysqldump of the bpbooks database
+	•	Includes routines, triggers, and events
+	•	Uses --single-transaction for consistency
+	•	Rotates old backups automatically (keeps last N dumps)
+
+Output location
+	~/Backups/bpbooks/bpbooks-YYYYMMDD-HHMMSS.sql.gz
+
+This backup is the primary data safety net.
+
+⸻
+
+2) Project Snapshot Backup (Application + helpers)
+
+A second backup captures the project state and operational tooling.
+
+Script
+	~/bin/backup_bookcatalog.sh
+
+Included
+	•	Project source (~/Projects/BookCatalog)
+	•	00-basedata/ (SQL helpers, scripts, QC reports)
+	•	public/uploads/ (book cover images)
+	•	~/bin/ (operational scripts, including backup tooling)
+
+Explicitly excluded
+	•	frontend/node_modules/
+	•	public/dist/
+	•	downloaded-covers/
+	•	.git/, IDE folders, build artifacts
+
+Output
+	~/Backups/bookcatalog/bookcatalog-YYYYMMDD-HHMMSS.tgz
+	~/Backups/bookcatalog/bookcatalog-YYYYMMDD-HHMMSS.tgz.sha256
+	
+This backup is intended for:
+	•	disaster recovery
+	•	environment reconstruction
+	•	historical reference
+
+⸻
+
+Recommended restore order
+	1.	Restore database from bpbooks-*.sql.gz
+	2.	Restore public/uploads/ from project snapshot
+	3.	Deploy application source
+	4.	Rebuild frontend if needed (public/dist is intentionally excluded)
+
+⸻
+
+✅ Authentication & User Management
+
+User management is handled via a CLI helper script.
+This avoids manual database manipulation and ensures consistent user creation.
+
+Creating a user
+
+Run from the project root:
+	php public/create_user.php 'username' 'YourStrongPassword' admin
+
+or for a read-only user:
+	php public/create_user.php 'username' 'YourStrongPassword' reader
+
+Roles
+	•	admin
+	•	Full access
+	•	Can trigger backups
+	•	Can manage catalog data
+	•	reader
+	•	Read-only access
+	•	No administrative actions
+	•	Backup actions are blocked server-side
+
+Notes
+	•	Passwords are stored hashed (never in clear text)
+	•	Password policy: min 12 chars, 1 lowercase, 1 uppercase, 1 digit, 1 special
+	•	Role checks are enforced on the backend
+	•	UI elements may be hidden for non-admins, but authorization is always verified server-side
+	•	Break-glass user creation: `public/create_user.php` is the emergency path if UI login fails
+
+Auth event logging
+	•	Auth events are stored in an append-only `AuthEvents` table
+	•	See `00-basedata/auth_events.sql` for the table definition
+	•	Recommended retention: keep 6–12 months via scheduled purge
+
+✅ Security Notes
+
+This project follows a minimal but explicit security model, appropriate for a self-hosted catalog application.
+
+Password handling
+	•	Passwords are never stored in clear text
+	•	Passwords are hashed at user creation time
+	•	Only the hash is stored in the database
+	•	The application never logs or exposes passwords
+	•	Hardened session cookies set `HttpOnly`, `SameSite=Lax`, and `Secure` when HTTPS is enabled
+
+The exact hashing algorithm is defined in the backend authentication code and can be changed centrally if needed.
+
+Role-based access control (RBAC)
+
+Two roles exist:
+	•	admin
+	•	Full read/write access
+	•	Can trigger backups
+	•	Can manage users and catalog data
+	•	reader
+	•	Read-only access
+	•	Administrative endpoints are blocked
+
+Enforcement model
+	•	Authorization is enforced server-side
+	•	UI visibility (buttons, menus) is considered cosmetic only
+	•	All sensitive endpoints (e.g. backup) verify the user role explicitly
+
+This ensures that even if a user manually crafts a request, unauthorized actions are rejected.
+
+Operational scripts
+	•	Backup and maintenance scripts live in ~/bin
+	•	These scripts are not web-accessible
+	•	They are included in project snapshot backups for reproducibility
+
+Secrets & configuration
+	•	Database credentials and secrets must not be committed to version control
+	•	Configuration files containing secrets should be:
+	•	injected via environment variables, or
+	•	stored outside the project root
+
+✅ Disaster Recovery – Checklist
+
+This checklist describes how to recover the BookCatalog system from backups.
+
+Prerequisites
+	•	Working system with:
+	•	PHP
+	•	MySQL
+	•	required PHP extensions
+	•	Access to backup files:
+	•	database dump (bpbooks-*.sql.gz)
+	•	project snapshot (bookcatalog-*.tgz)
+	•	Correct file permissions on the target system
+
+⸻
+
+Step 1 – Restore the database
+	gunzip -c bpbooks-YYYYMMDD-HHMMSS.sql.gz | mysql bpbooks
+
+	Verify:
+	•	tables exist
+	•	row counts look plausible
+	•	no errors during import
+
+Step 2 – Restore project snapshot
+	tar -xzf bookcatalog-YYYYMMDD-HHMMSS.tgz -C /target/path
+
+
+	This restores:
+	•	application source
+	•	00-basedata/
+	•	public/uploads/ (book covers)
+	•	operational scripts under bin/
+
+⸻
+
+Step 3 – Restore uploads permissions
+
+Ensure the web server can read uploaded covers:
+	chown -R www-data:www-data public/uploads
+	chmod -R 755 public/uploads
+
+(adjust user/group as appropriate)
+
+⸻
+
+Step 4 – Rebuild frontend (if applicable)
+
+public/dist is intentionally not part of the backup.
+
+If the frontend is used:
+	cd frontend
+	npm install
+	npm run build
+
+Deploy the resulting build into public/dist.
+
+⸻
+
+Step 5 – Verify authentication
+	•	Create or re-create admin user if needed:
+	php public/create_user.php admin StrongPassword admin
+	
+	•	Log in as:
+	•	admin (full access)
+	•	reader (verify restrictions)
+
+⸻
+
+Step 6 – Sanity checks
+	•	Open the catalog UI
+	•	Verify book list loads
+	•	Spot-check cover images
+	•	Trigger a test backup (admin)
+	•	Confirm backup file is valid (unzip -t)
+
+⸻
+
+Recovery complete
+
+At this point:
+	•	catalog data is restored
+	•	covers are available
+	•	application is operational
+	•	backups are functional again
+	
+
+Migrating from macos Tahoe to Fedora Core 43 server
+
+1️⃣ Component mapping (macOS → Fedora)
+
+You already captured this well; I’ll just refine it.
+
+Apache (httpd)
+
+macOS (brew)								Fedora
+/opt/homebrew/opt/httpd/bin/httpd			/usr/sbin/httpd
+Config: /opt/homebrew/etc/httpd/httpd.conf	/etc/httpd/conf/httpd.conf
+Modules: bundled via brew					Modules split into packages
+
+✅ Fedora uses prefork MPM + mod_php by default, which matches macOS setup.
+
+PHP
+
+macOS										Fedora
+PHP via Homebrew							PHP via DNF
+/opt/homebrew/etc/php/8.5/php.ini			/etc/php.ini
+libphp.so loaded directly					libphp.so via mod_php
+
+dnf install php php-cli php-common php-gd php-intl php-mysqlnd \
+           php-opcache php-pecl-zip php-mbstring
+
+Notes:
+	•	php-mcrypt is obsolete → do not install
+	•	phpMyAdmin should be optional, not core
+	•	Imagick (for thumbnails!) will need: dnf install php-pecl-imagick ImageMagick
+
+MySQL
+
+macOS										Fedora
+Oracle DMG									dnf install mysql-server
+MySQL 9.x									MySQL 8.x (Fedora default)
+
+⚠️ Important:
+	•	Fedora does not ship MySQL 9 yet
+	•	MySQL 8.0 is 100% compatible with existing schema and dumps
+	
+Config paths:
+
+Purpose										Fedora
+Server config								/etc/my.cnf
+Client config								~/.my.cnf
+
+local-infile fix applies exactly the same way on Fedora.
+
+2️⃣ Apache configuration translation (important)
+
+macOS config
+DocumentRoot "/Users/bajanp/Projects/BookCatalog/public"
+Alias /bookcatalog /Users/bajanp/Projects/BookCatalog/public
+
+Fedora equivalent (recommended)
+On Fedora, do not put this directly into httpd.conf. Instead:
+/etc/httpd/conf.d/bookcatalog.conf
+
+ServerName localhost
+
+DocumentRoot /var/www/bookcatalog/public
+
+<Directory /var/www/bookcatalog/public>
+    AllowOverride All
+    Require all granted
+</Directory>
+
+Alias /bookcatalog /var/www/bookcatalog/public
+
+Then:
+
+mkdir -p /var/www/bookcatalog
+mkdir -p /var/www/bookcatalog/public
+chown -R apache:apache /var/www/bookcatalog
+
+📌 Why this matters
+Fedora uses SELinux → /Users/... paths will fail silently.
+
+4️⃣ PHP configuration parity
+
+max_execution_time = 120
+max_input_time = 120
+memory_limit = 256M
+post_max_size = 25M
+file_uploads = On
+upload_max_filesize = 20M
+max_file_uploads = 20
+default_socket_timeout = 120
+
+After changes:
+	systemctl restart httpd
+
+
+✅ Fedora Server Setup Checklist
+
+(BookCatalog / Apache / PHP / MySQL / Images)
+
+1️⃣ Base System
+
+OS
+	•	Fedora Core 43 Server
+	•	Static hostname set
+	hostnamectl set-hostname bookcatalog
+
+Updates
+	dnf update -y
+	reboot
+
+
+2️⃣ SELinux (important)
+
+Verify status:
+	sestatus
+
+✔ Current mode: permissive
+
+That is perfect for now.
+Do NOT disable SELinux.
+
+Later (optional hardening):
+	setenforce enforcing
+	
+
+⸻
+
+3️⃣ Apache (httpd)
+
+Install
+	dnf install -y httpd mod_ssl
+
+Enable & start
+	systemctl enable httpd
+	systemctl start httpd
+
+Firewall
+	systemctl enable --now firewalld
+
+	firewall-cmd --permanent --add-service=http
+	firewall-cmd --permanent --add-service=ssh
+	firewall-cmd --permanent --add-service=ftp
+
+	firewall-cmd --reload
+	firewall-cmd --list-all
+
+Document root
+	chown -R root:root /var/www/bookcatalog
+	chmod -R 755 /var/www/bookcatalog
+	mkdir -p /var/www/bookcatalog/public
+	mkdir -p /var/www/bookcatalog/public/uploads
+	chown -R apache:apache /var/www/bookcatalog/public/uploads
+	chmod -R 775 /var/www/bookcatalog/public/uploads
+
+4️⃣ Apache VirtualHost (recommended)
+
+Create:
+	/etc/httpd/conf.d/bookcatalog.conf
+	
+	<VirtualHost *:80>
+    ServerName localhost
+    DocumentRoot /var/www/bookcatalog/public
+
+    <Directory /var/www/bookcatalog/public>
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    ErrorLog  /var/log/httpd/bookcatalog_error.log
+    CustomLog /var/log/httpd/bookcatalog_access.log combined
+	</VirtualHost>
+
+Reload:
+	systemctl reload httpd
+
+5️⃣ PHP
+
+Install PHP stack
+
+	dnf install -y \
+  		php php-cli php-fpm \
+  		php-gd php-intl php-mysqlnd php-opcache \
+  		php-pecl-zip php-mbstring php-json php-xml \
+  		php-pecl-imagick
+
+✅ Imagick does NOT require a LoadModule
+	•	It is a PHP extension, not an Apache module
+	•	Just installing php-pecl-imagick is enough
+
+Verify:
+	php -m | grep imagick
+
+PHP-FPM (recommended)
+	systemctl enable php-fpm
+	systemctl start php-fpm
+	
+Apache auto-connects via proxy_fcgi on Fedora.
+
+php.ini settings
+
+File:
+	/etc/php.ini
+
+Minimum required (matches macOS setup):
+	max_execution_time = 120
+	max_input_time = 120
+	memory_limit = 256M
+	post_max_size = 25M
+	upload_max_filesize = 20M
+	max_file_uploads = 20
+	file_uploads = On
+	default_socket_timeout = 120
+
+Restart:
+	systemctl restart php-fpm
+	systemctl reload httpd
+
+6️⃣ MySQL / MariaDB
+
+Install (Fedora default = MariaDB)
+	dnf install -y mariadb-server mariadb
+
+Enable & start
+	systemctl enable mariadb
+	systemctl start mariadb
+
+Secure setup
+	mysql_secure_installation
+
+MySQL config
+
+File:
+	/etc/my.cnf.d/local.cnf
+	
+	[mysqld]
+	local-infile=1
+
+	[mysql]
+	local-infile=1
+
+Restart:
+	systemctl restart mariadb
+
+Verify:
+	mysql -e "SHOW VARIABLES LIKE 'local_infile';"
+	
+7️⃣ Database Restore (BookCatalog)
+
+Restore DB
+	systemctl restart mariadb
+	mysql < bpbooks-backup.sql
+
+✔ Safe because dump uses:
+	DROP TABLE IF EXISTS
+
+Uploads restore
+	cp -a uploads /var/www/bookcatalog/public/
+	chown -R apache:apache /var/www/bookcatalog/public/uploads
+
+8️⃣ Permissions (critical)
+	chown -R apache:apache /var/www/bookcatalog
+	find /var/www/bookcatalog -type d -exec chmod 755 {} \;
+	find /var/www/bookcatalog -type f -exec chmod 644 {} \;
+
+SELinux (permissive already, but correct context anyway):
+	restorecon -Rv /var/www/bookcatalog
+
+9️⃣ Imagick & Thumbnails
+Verify Imagick:
+	php -r "new Imagick(); echo 'OK';"
+
+Rebuild thumbs if needed:
+	php public/normalize_covers.php --re --h=240
+	
+🔟 Smoke Tests
+PHP
+	php -v
+	php -m | grep imagick
+	
+Web
+	•	http://localhost/
+	•	Upload a cover
+	•	Generate thumbnail
+	•	Login works
+	•	CSV import works
+
+Logs
+	tail -f /var/log/httpd/bookcatalog_error.log
+	tail -f /var/log/php-fpm/error.log
+	journalctl -u mariadb
+
+1️⃣1️⃣ Backups (launchd → systemd)
+
+If migrating your macOS backup script:
+	•	Place script in /usr/local/bin/backup_bpbooks.sh
+	•	Create systemd timer:
+	/etc/systemd/system/bpbooks-backup.timer
+	/etc/systemd/system/bpbooks-backup.service
+	
+1️⃣2️⃣ Optional Hardening (later)
+	•	Switch SELinux to enforcing
+	•	Bind Apache only to LAN IP
+	•	Disable PHP error display
+	•	Read-only user accounts
+
+Import content and DB on Linux
+DB:
+Create the 'bpbooks' DB:
+	mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS bpbooks CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
+
+Collation: 'utf8mb4_0900_ai_ci': solved by modified sqldump script
+
+On linux - create DB user 'bajanp'
+	CREATE USER 'bajanp'@'localhost' IDENTIFIED BY 'STRONG_PASSWORD_HERE';
+	GRANT ALL PRIVILEGES ON bpbooks.* TO 'bajanp'@'localhost';
+	FLUSH PRIVILEGES;
+
+Import documents to /var/www/bookcatalog
+1. stop apache: 'systemctl stop httpd'
+2. upload tgz package
+3. create temp directory
+4. unpack tgz into temp directory
+5. remove frontend and public directories from /var/www/bookcatalog/
+	rm -rf /var/www/bookcatalog/frontend /var/www/bookcatalog/public
+6. move contents from temp to /var/www/bookcatalog/
+	mv /root/bookcatalog-import/* /var/www/bookcatalog/
+7. adjust ownership: chown -R apache:apache /var/www/bookcatalog
+	chown -R apache:apache /var/www/bookcatalog
+8. check and if necessary adjust Alias and Directory in /etc/httpd/conf.d/bookcatalog.conf
+9. cd /var/www/bookcatalog/frontend
+10. do:
+	'npm install @vue/cli-service --save-dev'
+	'npm install'
+11. build it from there: 
+	'npm run build'
+12. Verify build output (must contain index.html, js/, css/)
+	ls -l /var/www/bookcatalog/public/dist
+13. Database & runtime sanity - Ensure DB user exists and matches config.php
+	Note: runtime config is now loaded from $HOME/.config/config.php (or via BOOKCATALOG_CONFIG).
+	CREATE USER 'bajanp'@'localhost' IDENTIFIED BY '...';
+	GRANT ALL PRIVILEGES ON bpbooks.* TO 'bajanp'@'localhost';
+	FLUSH PRIVILEGES;
+14. Import DB dump before first login
+	mysql -u root -p bpbooks < bpbooks-portable.sql
+15. Restart services
+	systemctl restart mariadb
+	systemctl start httpd
+16. Checks - open
+	http://<linux-ip>/bookcatalog/
+17. Verify:
+	•	SPA loads (no blank page)
+	•	/bookcatalog/login.php returns JSON (no 404)
+	•	Login works
+	•	Covers visible
+	•	Admin actions gated correctly
+	
+	
+
+⸻
+
+Authors
+Internal tooling maintained by Peter Bajan & ChatGPT.

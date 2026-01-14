@@ -1,0 +1,5 @@
+{
+  "devDependencies": {
+    "@berthojoris/mcp-mysql-server": "^1.33.2"
+  }
+}

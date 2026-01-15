@@ -51,15 +51,48 @@ function prompt_hidden(string $label): string {
     return trim($line);
 }
 
+function password_policy_rules(string $username = ''): array {
+    return [
+        [
+            'message' => 'Password must be at least 12 characters.',
+            'check' => static fn (string $password): bool => strlen($password) >= 12,
+        ],
+        [
+            'message' => 'Password must include a lowercase letter.',
+            'check' => static fn (string $password): bool => (bool)preg_match('/[a-z]/', $password),
+        ],
+        [
+            'message' => 'Password must include an uppercase letter.',
+            'check' => static fn (string $password): bool => (bool)preg_match('/[A-Z]/', $password),
+        ],
+        [
+            'message' => 'Password must include a digit.',
+            'check' => static fn (string $password): bool => (bool)preg_match('/[0-9]/', $password),
+        ],
+        [
+            'message' => 'Password must include a special character.',
+            'check' => static fn (string $password): bool => (bool)preg_match('/[^a-zA-Z0-9]/', $password),
+        ],
+        [
+            'message' => 'Password cannot contain the username.',
+            'check' => static fn (string $password): bool => $username === '' || stripos($password, $username) === false,
+        ],
+    ];
+}
+
+function password_policy_messages(string $username = ''): array {
+    return array_map(
+        static fn (array $rule): string => $rule['message'],
+        password_policy_rules($username)
+    );
+}
+
 function password_policy_errors(string $password, string $username = ''): array {
     $errors = [];
-    if (strlen($password) < 12) $errors[] = 'Password must be at least 12 characters.';
-    if (!preg_match('/[a-z]/', $password)) $errors[] = 'Password must include a lowercase letter.';
-    if (!preg_match('/[A-Z]/', $password)) $errors[] = 'Password must include an uppercase letter.';
-    if (!preg_match('/[0-9]/', $password)) $errors[] = 'Password must include a digit.';
-    if (!preg_match('/[^a-zA-Z0-9]/', $password)) $errors[] = 'Password must include a special character.';
-    if ($username !== '' && stripos($password, $username) !== false) {
-        $errors[] = 'Password cannot contain the username.';
+    foreach (password_policy_rules($username) as $rule) {
+        if (!($rule['check'])($password)) {
+            $errors[] = $rule['message'];
+        }
     }
     return $errors;
 }
@@ -258,7 +291,12 @@ if ($create_dedicated) {
         fail('Database username cannot be empty.');
     }
 
-    $app_db_host = prompt('BookCatalog DB user host', 'localhost');
+    $app_db_host = prompt('BookCatalog DB user host', $host);
+    fwrite(STDOUT, "BookCatalog DB user password requirements:\n");
+    foreach (password_policy_messages($app_db_user) as $message) {
+        fwrite(STDOUT, "- {$message}\n");
+    }
+    fwrite(STDOUT, "\n");
     $app_db_pass = prompt_hidden('BookCatalog DB user password');
     $app_db_pass_confirm = prompt_hidden('Confirm BookCatalog DB user password');
     if ($app_db_pass === '' || $app_db_pass !== $app_db_pass_confirm) {
@@ -267,12 +305,15 @@ if ($create_dedicated) {
 
     try {
         $user_q = $admin_pdo->quote($app_db_user);
-        $host_q = $admin_pdo->quote($app_db_host);
         $pass_q = $admin_pdo->quote($app_db_pass);
-        $admin_pdo->exec("CREATE USER IF NOT EXISTS {$user_q}@{$host_q} IDENTIFIED BY {$pass_q}");
-        $admin_pdo->exec(
-            "GRANT SELECT, INSERT, UPDATE, DELETE ON `{$dbname}`.* TO {$user_q}@{$host_q}"
-        );
+        $user_hosts = array_unique([$app_db_host, $host]);
+        foreach ($user_hosts as $user_host) {
+            $host_q = $admin_pdo->quote($user_host);
+            $admin_pdo->exec("CREATE USER IF NOT EXISTS {$user_q}@{$host_q} IDENTIFIED BY {$pass_q}");
+            $admin_pdo->exec(
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON `{$dbname}`.* TO {$user_q}@{$host_q}"
+            );
+        }
         $admin_pdo->exec('FLUSH PRIVILEGES');
     } catch (Throwable $e) {
         fail('Failed to create/grant DB user: ' . $e->getMessage());
@@ -285,9 +326,9 @@ if ($create_dedicated) {
 
 $admin_username = '';
 while ($admin_username === '') {
-    $admin_username = prompt('Initial admin username');
+    $admin_username = prompt('Initial catalog admin username');
     if ($admin_username === '') {
-        fwrite(STDOUT, "Admin username is required.\n");
+        fwrite(STDOUT, "Catalog admin username is required.\n");
         continue;
     }
 
@@ -300,9 +341,14 @@ while ($admin_username === '') {
 }
 
 $admin_password = '';
+fwrite(STDOUT, "Password requirements:\n");
+foreach (password_policy_messages($admin_username) as $message) {
+    fwrite(STDOUT, "- {$message}\n");
+}
+fwrite(STDOUT, "\n");
 while ($admin_password === '') {
-    $admin_password = prompt_hidden('Initial admin password');
-    $admin_password_confirm = prompt_hidden('Confirm admin password');
+    $admin_password = prompt_hidden('Initial catalog admin password');
+    $admin_password_confirm = prompt_hidden('Confirm catalog admin password');
 
     if ($admin_password === '' || $admin_password !== $admin_password_confirm) {
         fwrite(STDOUT, "Passwords do not match.\n");
@@ -388,7 +434,7 @@ try {
 
 fwrite(STDOUT, "\nInstallation complete.\n\n");
 fwrite(STDOUT, "Login at:\nhttps://yourhost/\n\n");
-fwrite(STDOUT, "Admin user:\n{$admin_username}\n\n");
+fwrite(STDOUT, "Catalog admin user:\n{$admin_username}\n\n");
 fwrite(STDOUT, "Next steps:\n");
 fwrite(STDOUT, "- cd frontend && npm install && npm run build\n");
 fwrite(STDOUT, "- Configure your Apache/Nginx vhost to point to public/\n");

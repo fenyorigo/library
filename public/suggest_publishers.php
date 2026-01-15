@@ -18,12 +18,26 @@ try {
         SELECT publisher_id AS id, name
           FROM Publishers
          WHERE name LIKE :q COLLATE utf8mb4_0900_ai_ci
-         ORDER BY name
+         ORDER BY CASE WHEN name LIKE :prefix COLLATE utf8mb4_0900_ai_ci THEN 0 ELSE 1 END, name
          LIMIT 20
     ";
-    $st = $pdo->prepare($sql);
-    $st->execute([':q' => '%' . $q . '%']);
-    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    try {
+        $st = $pdo->prepare($sql);
+        $st->execute([':q' => '%' . $q . '%', ':prefix' => $q . '%']);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        // Fallback if collation not supported (e.g., MariaDB).
+        $sql2 = "
+            SELECT publisher_id AS id, name
+              FROM Publishers
+             WHERE name LIKE :q
+             ORDER BY CASE WHEN name LIKE :prefix THEN 0 ELSE 1 END, name
+             LIMIT 20
+        ";
+        $st = $pdo->prepare($sql2);
+        $st->execute([':q' => '%' . $q . '%', ':prefix' => $q . '%']);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    }
     json_out(['ok' => true, 'data' => is_array($rows) ? $rows : []]);
 } catch (Throwable $e) {
     json_fail($e->getMessage(), 500);

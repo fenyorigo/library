@@ -5,6 +5,10 @@
 - PHP extensions: pdo, pdo_mysql, json, mbstring, openssl
 - Writable directories: `public/uploads`, `public/user-assets`
 - MySQL/MariaDB admin credentials for initial setup
+- Fedora checklist (if applicable):
+  - Web root: `/var/www/library`
+  - Apache vhost dir: `/etc/httpd/conf.d/`
+  - Ensure SELinux allows Apache to write `public/uploads` and `public/user-assets`
 
 If this is a completely fresh install, jump to the CLI Install section. If the system already exists or has leftover components, do a clean reset first.
 

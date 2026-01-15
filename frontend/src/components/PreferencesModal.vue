@@ -11,7 +11,19 @@
           <label class="label">Background</label>
           <div class="color-row">
             <input type="color" v-model="form.bg_color" />
-            <input type="text" v-model.trim="form.bg_color" placeholder="#f6e09f" />
+            <input
+              type="text"
+              v-model.trim="form.bg_color"
+              placeholder="#f6e09f"
+              name="pref_bg_color"
+              autocomplete="new-password"
+              autocapitalize="off"
+              spellcheck="false"
+              data-lpignore="true"
+              data-1p-ignore="true"
+              @focus="scrubAutofill('bg_color')"
+              @blur="scrubAutofill('bg_color')"
+            />
           </div>
         </div>
 
@@ -19,7 +31,19 @@
           <label class="label">Foreground</label>
           <div class="color-row">
             <input type="color" v-model="form.fg_color" />
-            <input type="text" v-model.trim="form.fg_color" placeholder="#222222" />
+            <input
+              type="text"
+              v-model.trim="form.fg_color"
+              placeholder="#222222"
+              name="pref_fg_color"
+              autocomplete="new-password"
+              autocapitalize="off"
+              spellcheck="false"
+              data-lpignore="true"
+              data-1p-ignore="true"
+              @focus="scrubAutofill('fg_color')"
+              @blur="scrubAutofill('fg_color')"
+            />
           </div>
         </div>
 
@@ -122,7 +146,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { updateUserPreferences, assetUrl } from "../api";
 import ChangePassword from "./ChangePassword.vue";
 
@@ -155,6 +179,18 @@ const form = ref({
 });
 
 const objectUrl = ref("");
+const autofillTimers = ref<number[]>([]);
+const cleanHex = (value: unknown) => {
+  if (!value) return "";
+  const raw = String(value).trim();
+  return /^#[0-9a-fA-F]{6}$/.test(raw) ? raw : "";
+};
+const scrubAutofill = (key: "bg_color" | "fg_color") => {
+  const current = form.value[key];
+  if (current && !cleanHex(current)) {
+    form.value[key] = "";
+  }
+};
 const logoPreview = computed(() => {
   if (objectUrl.value) return objectUrl.value;
   const raw = props.preferences?.logo_url;
@@ -169,8 +205,8 @@ watch(
       objectUrl.value = "";
     }
     form.value = {
-      bg_color: prefs?.bg_color || "",
-      fg_color: prefs?.fg_color || "",
+      bg_color: cleanHex(prefs?.bg_color),
+      fg_color: cleanHex(prefs?.fg_color),
       text_size: prefs?.text_size || "medium",
       per_page: prefs?.per_page || 25,
       remove_logo: false,
@@ -191,6 +227,20 @@ watch(
   },
   { immediate: true, deep: true }
 );
+
+onMounted(() => {
+  const scrub = () => {
+    scrubAutofill("bg_color");
+    scrubAutofill("fg_color");
+  };
+  autofillTimers.value.push(window.setTimeout(scrub, 0));
+  autofillTimers.value.push(window.setTimeout(scrub, 250));
+});
+
+onBeforeUnmount(() => {
+  autofillTimers.value.forEach((timer) => window.clearTimeout(timer));
+  autofillTimers.value = [];
+});
 
 const onPickLogo = (e: Event) => {
   const input = e.target as HTMLInputElement | null;

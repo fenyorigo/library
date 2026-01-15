@@ -24,6 +24,12 @@
           v-model.trim="q"
           :disabled="loading"
           type="search"
+          name="book_search"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+          data-lpignore="true"
+          data-1p-ignore="true"
           placeholder="Search title / author / subject..."
           @keyup.enter="onSearch"
         />
@@ -260,6 +266,8 @@ const preferences = ref({
   show_loaned_date: false,
   show_subjects: false,
 });
+const initialQueryParam = ref(null);
+const searchAutofillTimers = ref([]);
 
 const onUnauthorized = () => {
   rows.value = [];
@@ -484,7 +492,13 @@ const reload = async () => {
 
 const applyUrlParams = () => {
   const p = new URLSearchParams(window.location.search);
-  if (p.has("q")) q.value = p.get("q") || "";
+  if (p.has("q")) {
+    const qp = p.get("q") || "";
+    q.value = qp;
+    initialQueryParam.value = qp;
+  } else {
+    initialQueryParam.value = null;
+  }
   if (p.has("page")) page.value = Math.max(1, parseInt(p.get("page") || "1", 10) || 1);
   if (p.has("per_page")) {
     perPage.value = Math.max(1, parseInt(p.get("per_page") || "25", 10) || 25);
@@ -515,6 +529,29 @@ const clearSearch = () => {
   q.value = "";
   page.value = 1;
   reload();
+};
+
+const scrubSearchAutofill = () => {
+  if (initialQueryParam.value !== null) return false;
+  const username = user.value?.username;
+  if (!username) return false;
+  const current = String(q.value || "").trim();
+  if (current && current.toLowerCase() === String(username).toLowerCase()) {
+    q.value = "";
+    return true;
+  }
+  return false;
+};
+
+const scheduleSearchScrub = () => {
+  searchAutofillTimers.value.forEach((timer) => window.clearTimeout(timer));
+  searchAutofillTimers.value = [];
+  searchAutofillTimers.value.push(window.setTimeout(() => {
+    if (scrubSearchAutofill()) reload();
+  }, 0));
+  searchAutofillTimers.value.push(window.setTimeout(() => {
+    if (scrubSearchAutofill()) reload();
+  }, 250));
 };
 
 const onChangePage = (newPage) => {
@@ -804,18 +841,29 @@ onMounted(async () => {
   await initAuth();
   applyPreferences(preferences.value);
   window.addEventListener("popstate", onPopState);
+  window.addEventListener("focus", scheduleSearchScrub);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("popstate", onPopState);
+  window.removeEventListener("focus", scheduleSearchScrub);
+  searchAutofillTimers.value.forEach((timer) => window.clearTimeout(timer));
+  searchAutofillTimers.value = [];
 });
 
 watch(user, async (next, prev) => {
   if (next && !prev) {
     await loadPreferences();
     reload();
+    scheduleSearchScrub();
   } else if (!next) {
     resetPreferences();
+  }
+});
+
+watch(showPreferences, (open, wasOpen) => {
+  if (wasOpen && !open) {
+    scheduleSearchScrub();
   }
 });
 </script>

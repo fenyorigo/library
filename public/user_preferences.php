@@ -65,7 +65,7 @@ function ensure_user_assets_dir(int $uid): string {
 }
 
 function cleanup_logo_files(string $dir): void {
-  foreach (glob($dir . '/logo.*') ?: [] as $old) {
+  foreach (glob($dir . '/logo*.*') ?: [] as $old) {
     @unlink($old);
   }
 }
@@ -94,7 +94,9 @@ function process_logo_upload(int $uid, array $file): string {
   cleanup_logo_files($dir);
 
   $ext = $allowed[$mime];
-  $dst = $dir . '/logo.' . $ext;
+  $stamp = date('YmdHis');
+  $suffix = bin2hex(random_bytes(3));
+  $dst = $dir . '/logo-' . $stamp . '-' . $suffix . '.' . $ext;
 
   $img = new Imagick();
   $img->readImage($tmp_path);
@@ -116,7 +118,7 @@ function process_logo_upload(int $uid, array $file): string {
   }
   $img->clear(); $img->destroy();
 
-  return 'user-assets/' . $uid . '/logo.' . $ext;
+  return 'user-assets/' . $uid . '/logo-' . $stamp . '-' . $suffix . '.' . $ext;
 }
 
 try {

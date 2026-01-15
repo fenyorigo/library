@@ -9,6 +9,7 @@
   - Web root: `/var/www/library`
   - Apache vhost dir: `/etc/httpd/conf.d/`
   - Ensure SELinux allows Apache to write `public/uploads` and `public/user-assets`
+  - If adding non-standard Apache ports (e.g. 8444), ensure SELinux allows httpd to bind the port (semanage port -a -t http_port_t -p tcp 8444).
 
 If this is a completely fresh install, jump to the CLI Install section. If the system already exists or has leftover components, do a clean reset first.
 
@@ -31,11 +32,12 @@ Manual cleanup steps (if needed):
 ### Restore options
 In case you want to use catalog data from an existing system, please read the restore options before proceeding.
 - MariaDB usually accepts Oracle MySQL dumps, but MySQL may reject MariaDB dumps due to stricter FK/type checks.
+  (MySQL/MariaDB differ in collations, FK enforcement, and type handling; schema drift between versions makes dumps fragile across vendors.)
 - Dump restores are safest when source and target use the same database vendor and version.
 - If you are crossing vendors, use the CSV import flow below.
 Option A: SQL dump restore (same-vendor only)
 - Prepare a catalog dump on the existing system using `mysqldump`.
-Option B: CSV import (recommended; works across MariaDB/MySQL either direction)
+Option B: CSV import (preferred DR and migration method; cross-vendor safe, works across MariaDB/MySQL either direction)
 - Do a CSV export as admin on the existing system.
 
 ### CLI Install
@@ -68,6 +70,9 @@ Only needed when you have existing data/backup and are not starting with an empt
 2. Restore the previously prepared covers backup into `public/uploads/`.
 
 ## Security notes
-- Keep `config.php` readable only by the web server user (mode 600 recommended).
+- Keep `config.php` readable only by the web server user (mode 600 recommended). Mode 600 is appropriate when Apache runs as the file owner; otherwise use 640 with a dedicated web-server group.
 - Prefer a dedicated DB user with limited privileges.
 - Keep MySQL admin credentials out of `config.php`.
+
+## Ultimate DR validation:
+Successful recovery is defined as rebuilding from a clean OS using only the public install procedure and a CSV export, without reusing any previous system state

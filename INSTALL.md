@@ -15,6 +15,7 @@ The quick cleanup path:
 ```bash
 ./cleanup.sh
 ```
+Note: `cleanup.sh` uses the current repo path by default. Override with `ROOT=/var/www/library ./cleanup.sh` on Fedora.
 Manual cleanup steps (if needed):
 1. Drop the local database (default `books`).
 2. Remove local data/build/config files:
@@ -48,6 +49,7 @@ Option B: CSV import (recommended; works across MariaDB/MySQL either direction)
 6. Apache config alignment (if using the Apache vhost):
    - `/opt/homebrew/etc/httpd/extra/httpd-library.conf`
    - `SetEnv BOOKCATALOG_CONFIG /Users/bajanp/Projects/library/config.php`
+   - On Fedora, use `/etc/httpd/conf.d/` for the vhost and set `DocumentRoot` to `/var/www/library/public`.
 
 ## Post-install checks
 - Verify `public/uploads` and `public/user-assets` are writable by the web server.

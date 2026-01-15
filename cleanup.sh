@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="/Users/bajanp/Projects/library"
+ROOT="${ROOT:-$(cd "$(dirname "$0")" && pwd)}"
 
 echo "This will drop the local database and remove local data/build/config files."
 read -r -p "Continue? (y/N): " confirm

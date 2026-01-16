@@ -309,8 +309,9 @@ Notes
 ⸻
 
 🔧 App Endpoints (selected)
-	•	backup_full.php – creates a ZIP with JSON/CSVs + uploads/ subset and a checksum manifest
-	•	export_books_csv.php, export_books_json.php – flat exports
+	•	backup_full.php – creates a ZIP with CSVs + uploads/ subset and a checksum manifest
+	•	export_books_csv.php – flat CSV export
+	•	export_covers_zip.php – ZIP of uploads/ (all covers + thumbnails)
 	•	import_csv.php – CSV import (title;subtitle;year_published;authors)
 	•	list_books.php – paginated/searchable list API (authors now include multiple names; order via Books_Authors.author_ord)
 	•	addBook.php, update_book.php, delete_book.php – CRUD

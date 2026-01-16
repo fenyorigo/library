@@ -49,10 +49,10 @@
         <a
           v-if="isAdmin"
           class="link-btn"
-          :href="exportJsonHref"
+          href="export_covers_zip.php"
           target="_blank"
           rel="noopener"
-        >JSON</a>
+        >Covers ZIP</a>
         <a
           v-if="isAdmin"
           class="link-btn"
@@ -311,12 +311,6 @@ const exportCsvHref = computed(() => {
   const p = new URLSearchParams();
   if (q.value) p.set("q", q.value);
   return `export_books_csv.php${p.toString() ? "?" + p.toString() : ""}`;
-});
-
-const exportJsonHref = computed(() => {
-  const p = new URLSearchParams();
-  if (q.value) p.set("q", q.value);
-  return `export_books_json.php${p.toString() ? "?" + p.toString() : ""}`;
 });
 
 const ensureAdmin = () => {

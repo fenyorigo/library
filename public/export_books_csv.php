@@ -8,11 +8,64 @@ require_login();
 error_reporting(E_ALL & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 
-header('Content-Type: text/csv; charset=utf-8');
-header('Content-Disposition: attachment; filename="books_export.csv"');
-header('Cache-Control: no-store');
-
 $pdo = pdo();
+
+try {
+    $server_version = (string)$pdo->getAttribute(PDO::ATTR_SERVER_VERSION);
+    $driver_name = strtolower((string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME));
+} catch (Throwable $e) {
+    $server_version = '';
+    $driver_name = '';
+}
+
+if ($driver_name === 'mysql') {
+    $db_vendor = stripos($server_version, 'mariadb') !== false ? 'mariadb' : 'mysql';
+} else {
+    $db_vendor = $driver_name ?: 'db';
+}
+
+if (PHP_OS_FAMILY === 'Darwin') {
+    $os_label = 'macos';
+} elseif (PHP_OS_FAMILY === 'Linux') {
+    $os_label = 'linux';
+    $os_release = @file_get_contents('/etc/os-release');
+    if ($os_release !== false) {
+        if (preg_match('/^ID=([a-z0-9._-]+)$/mi', $os_release, $m)) {
+            if (strtolower($m[1]) === 'fedora') {
+                $os_label = 'fedora';
+            }
+        }
+    }
+} else {
+    $os_label = strtolower(PHP_OS_FAMILY);
+}
+
+// Default to frontend package.json version when available.
+$app_version = '';
+$pkg_path = dirname(__DIR__) . '/frontend/package.json';
+$pkg_raw = @file_get_contents($pkg_path);
+if ($pkg_raw !== false) {
+    $pkg = json_decode($pkg_raw, true);
+    if (is_array($pkg) && !empty($pkg['version'])) {
+        $app_version = 'v' . $pkg['version'];
+    }
+}
+
+try {
+    $total_books = (int)$pdo->query("SELECT COUNT(*) FROM Books")->fetchColumn();
+} catch (Throwable $e) {
+    $total_books = 0;
+}
+
+$timestamp = date('Ymd_His');
+$suffix_parts = array_filter([$os_label, $db_vendor, $app_version]);
+$suffix = $suffix_parts ? '_' . implode('_', $suffix_parts) : '';
+$export_name = "export_{$total_books}_books_{$timestamp}{$suffix}.csv";
+$export_name = preg_replace('/[^A-Za-z0-9._-]/', '_', $export_name);
+
+header('Content-Type: text/csv; charset=utf-8');
+header('Content-Disposition: attachment; filename="' . $export_name . '"');
+header('Cache-Control: no-store');
 
 /**
  * Inputs:

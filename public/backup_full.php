@@ -22,11 +22,6 @@ function tmp_file(string $suffix): string {
     rename($p, $new);
     return $new;
 }
-function write_json(array $data): string {
-    $f = tmp_file('.json');
-    file_put_contents($f, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-    return $f;
-}
 function write_csv(array $rows, array $header): string {
     $f = tmp_file('.csv');
     $h = fopen($f, 'w');
@@ -75,7 +70,6 @@ try {
 }
 
 // ---------- write temp JSON/CSV ----------
-$json_books_path      = write_json($books);
 $csv_books_header     = ['id','title','subtitle','series','year_published','isbn','lccn','publisher','loaned_to','loaned_date','bookcase_no','shelf_no','cover_image','cover_file']; // cover_file last
 $csv_books_rows       = array_map(function($b){
     // cover_file is filename (last segment) or empty
@@ -141,7 +135,6 @@ BookCatalog – Full Backup
 Generated: {$generated_at}
 
 Includes:
-- books.json (all book rows, pretty JSON)
 - books.csv  (flat export; last column is cover_file)
 - authors.csv, publishers.csv, subjects.csv
 - Books_Authors.csv (with author_ord), Books_Subjects.csv
@@ -155,7 +148,6 @@ TXT;
 $zip->addFromString('README.txt', $readme);
 
 // data files
-$zip->addFile($json_books_path,     'data/books.json');
 $zip->addFile($csv_books_path,      'data/books.csv');
 $zip->addFile($csv_authors_path,    'data/authors.csv');
 $zip->addFile($csv_publishers_path, 'data/publishers.csv');
@@ -188,7 +180,6 @@ $sha = function (string $abs_path, string $zip_path) use (&$checksums) {
 };
 
 // hash the data files we added
-$sha($json_books_path,     'data/books.json');
 $sha($csv_books_path,      'data/books.csv');
 $sha($csv_authors_path,    'data/authors.csv');
 $sha($csv_publishers_path, 'data/publishers.csv');
@@ -227,7 +218,6 @@ readfile($zip_path);
 
 // optional cleanup of temp files
 @unlink($zip_path);
-@unlink($json_books_path);
 @unlink($csv_books_path);
 @unlink($csv_authors_path);
 @unlink($csv_publishers_path);

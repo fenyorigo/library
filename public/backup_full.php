@@ -105,7 +105,37 @@ $csv_bs_path          = write_csv($books_subjects,['book_id','subject_id']);
 
 // ---------- zip build ----------
 $zip = new ZipArchive();
-$zip_path = sys_get_temp_dir() . '/bookcatalog_backup_' . date('Ymd_His') . '.zip';
+if (PHP_OS_FAMILY === 'Darwin') {
+    $os_label = 'macos';
+} elseif (PHP_OS_FAMILY === 'Linux') {
+    $os_label = 'linux';
+    $os_release = @file_get_contents('/etc/os-release');
+    if ($os_release !== false) {
+        if (preg_match('/^ID=([a-z0-9._-]+)$/mi', $os_release, $m)) {
+            if (strtolower($m[1]) === 'fedora') {
+                $os_label = 'fedora';
+            }
+        }
+    }
+} else {
+    $os_label = strtolower(PHP_OS_FAMILY);
+}
+
+// Default to frontend package.json version when available.
+$app_version = '';
+$pkg_path = dirname(__DIR__) . '/frontend/package.json';
+$pkg_raw = @file_get_contents($pkg_path);
+if ($pkg_raw !== false) {
+    $pkg = json_decode($pkg_raw, true);
+    if (is_array($pkg) && !empty($pkg['version'])) {
+        $app_version = 'v' . $pkg['version'];
+    }
+}
+
+$timestamp = date('Ymd_His');
+$suffix_parts = array_filter([$os_label, $app_version]);
+$suffix = $suffix_parts ? '_' . implode('_', $suffix_parts) : '';
+$zip_path = sys_get_temp_dir() . "/bookcatalog_backup_{$timestamp}{$suffix}.zip";
 if ($zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
     json_fail('Zip open failed', 500);
 }
@@ -209,7 +239,7 @@ $zip->addFromString('sha256sums.txt', implode("\n", $checksums) . "\n");
 $zip->close();
 
 // ---------- stream zip download ----------
-$filename = 'bookcatalog_backup_' . date('Ymd_His') . '.zip';
+$filename = "bookcatalog_backup_{$timestamp}{$suffix}.zip";
 header('Content-Type: application/zip');
 header('Content-Disposition: attachment; filename="' . $filename . '"');
 header('Content-Length: ' . filesize($zip_path));

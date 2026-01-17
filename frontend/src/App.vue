@@ -39,27 +39,24 @@
         <button v-if="isAdmin" class="primary" @click="openAdd">+ Add Book</button>
         <button v-if="isAdmin" @click="openCsvImport">Import CSV</button>
         <button v-if="isAdmin" @click="onRebuildThumbs">Rebuild thumbs</button>
-        <a
+        <button
           v-if="isAdmin"
           class="link-btn"
-          :href="exportCsvHref"
-          target="_blank"
-          rel="noopener"
-        >Export CSV</a>
-        <a
+          type="button"
+          @click="onExportCsv"
+        >Export CSV</button>
+        <button
           v-if="isAdmin"
           class="link-btn"
-          href="export_covers_zip.php"
-          target="_blank"
-          rel="noopener"
-        >Covers ZIP</a>
-        <a
+          type="button"
+          @click="onExportCovers"
+        >Covers ZIP</button>
+        <button
           v-if="isAdmin"
           class="link-btn"
-          href="backup_full.php"
-          target="_blank"
-          rel="noopener"
-        >Full backup (ZIP)</a>
+          type="button"
+          @click="onExportFullBackup"
+        >Full backup (ZIP)</button>
         <button v-if="isAdmin" @click="openAuthorsMaintenance">Authors</button>
         <button v-if="isAdmin" @click="openUserManagement">Users</button>
         <button v-if="isAdmin" @click="openOrphanMaintenance">Orphan maintenance</button>
@@ -149,6 +146,13 @@
           <span v-if="rebuildThumbsTotal"> {{ rebuildThumbsDone }} / {{ rebuildThumbsTotal }}</span>
           <span v-else> {{ rebuildThumbsDone }}</span>
         </div>
+      </div>
+    </div>
+
+    <div v-if="backupBusy" class="busy-overlay" aria-live="polite">
+      <div class="busy-card">
+        <div class="spinner" aria-hidden="true"></div>
+        <div>{{ backupBusyMessage || "Preparing backup..." }}</div>
       </div>
     </div>
 
@@ -247,6 +251,8 @@ const rebuildThumbsTotal = ref(0);
 const rebuildThumbsUpdated = ref(0);
 const rebuildThumbsErrors = ref(0);
 const rebuildThumbsErrorList = ref([]);
+const backupBusy = ref(false);
+const backupBusyMessage = ref("");
 const preferences = ref({
   logo_url: null,
   bg_color: null,
@@ -307,11 +313,69 @@ const isAdmin = computed(() => {
   return role === "admin";
 });
 
-const exportCsvHref = computed(() => {
-  const p = new URLSearchParams();
-  if (q.value) p.set("q", q.value);
-  return `export_books_csv.php${p.toString() ? "?" + p.toString() : ""}`;
-});
+const buildBackupUrl = (endpoint, params = {}) => {
+  const u = new URL(apiUrl(endpoint));
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && String(value) !== "") {
+      u.searchParams.set(key, String(value));
+    }
+  });
+  return u;
+};
+
+const checkBackupMode = async (url) => {
+  const checkUrl = new URL(url.toString());
+  checkUrl.searchParams.set("check", "1");
+  const res = await fetch(checkUrl.toString(), { credentials: "same-origin" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  return data;
+};
+
+const runServerBackup = async (url, label) => {
+  backupBusyMessage.value = `Generating ${label} backup on the server...`;
+  backupBusy.value = true;
+  try {
+    const res = await fetch(url.toString(), { credentials: "same-origin" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) {
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    const dir = data.dir || "";
+    const filename = data.filename || "";
+    const path = data.path || (dir && filename ? `${dir}/${filename}` : dir);
+    const location = dir || path;
+    const msg = location
+      ? `The requested ${label} backup file is in ${location}${filename ? ` (filename: ${filename})` : ""}.`
+      : `The requested ${label} backup file is ready.`;
+    alert(msg);
+  } finally {
+    backupBusy.value = false;
+    backupBusyMessage.value = "";
+  }
+};
+
+const runBackupFlow = async (url, label) => {
+  try {
+    const mode = await checkBackupMode(url);
+    if (mode.mode === "stream") {
+      const popup = window.open(url.toString(), "_blank", "noopener");
+      if (!popup) {
+        window.location.assign(url.toString());
+      }
+      return;
+    }
+    if (mode.mode === "server") {
+      await runServerBackup(url, label);
+      return;
+    }
+    alert("Unexpected backup mode response.");
+  } catch (err) {
+    alert(err && err.message ? err.message : "Backup failed.");
+  }
+};
 
 const ensureAdmin = () => {
   if (!isAdmin.value) {
@@ -580,6 +644,26 @@ const resetSort = () => {
   dir.value = "asc";
   page.value = 1;
   reload();
+};
+
+const onExportCsv = async () => {
+  if (!ensureAdmin()) return;
+  const params = {};
+  if (q.value) params.q = q.value;
+  const url = buildBackupUrl("export_books_csv.php", params);
+  await runBackupFlow(url, "CSV");
+};
+
+const onExportCovers = async () => {
+  if (!ensureAdmin()) return;
+  const url = buildBackupUrl("export_covers_zip.php");
+  await runBackupFlow(url, "covers ZIP");
+};
+
+const onExportFullBackup = async () => {
+  if (!ensureAdmin()) return;
+  const url = buildBackupUrl("backup_full.php");
+  await runBackupFlow(url, "full backup");
 };
 
 const loadFullBook = async (book) => {

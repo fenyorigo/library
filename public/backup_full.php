@@ -12,7 +12,26 @@ ini_set('memory_limit', '512M');      // or '1G' if you like
 set_time_limit(600);                  // give the backup time
 ignore_user_abort(true);              // keep running if client disconnects
 
-require_once __DIR__ . '/functions.php';
+$backup_status = catalog_backup_dir_status();
+$check_mode = isset($_GET['check']) && $_GET['check'] === '1';
+
+if ($check_mode) {
+    if (!$backup_status['enabled']) {
+        json_out(['ok' => true, 'mode' => 'stream']);
+    }
+    if ($backup_status['status'] !== 'ready') {
+        json_fail(catalog_backup_dir_error($backup_status), 500);
+    }
+    json_out(['ok' => true, 'mode' => 'server', 'dir' => $backup_status['dir']]);
+}
+
+if ($backup_status['enabled'] && $backup_status['status'] !== 'ready') {
+    json_fail(catalog_backup_dir_error($backup_status), 500);
+}
+
+$server_side = $backup_status['enabled'] && $backup_status['status'] === 'ready';
+$backup_dir = $backup_status['dir'] ?? '';
+
 $pdo = pdo();
 
 // ---------- helpers ----------
@@ -135,7 +154,10 @@ if ($pkg_raw !== false) {
 $timestamp = date('Ymd_His');
 $suffix_parts = array_filter([$os_label, $app_version]);
 $suffix = $suffix_parts ? '_' . implode('_', $suffix_parts) : '';
-$zip_path = sys_get_temp_dir() . "/bookcatalog_backup_{$timestamp}{$suffix}.zip";
+$filename = "bookcatalog_backup_{$timestamp}{$suffix}.zip";
+$zip_path = $server_side
+    ? rtrim($backup_dir, "/\\") . '/' . $filename
+    : sys_get_temp_dir() . "/{$filename}";
 if ($zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
     json_fail('Zip open failed', 500);
 }
@@ -239,18 +261,45 @@ $zip->addFromString('sha256sums.txt', implode("\n", $checksums) . "\n");
 $zip->close();
 
 // ---------- stream zip download ----------
-$filename = "bookcatalog_backup_{$timestamp}{$suffix}.zip";
-header('Content-Type: application/zip');
-header('Content-Disposition: attachment; filename="' . $filename . '"');
-header('Content-Length: ' . filesize($zip_path));
-header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-readfile($zip_path);
+clearstatcache(true, $zip_path);
+$size_bytes = is_file($zip_path) ? (int)filesize($zip_path) : 0;
 
-// optional cleanup of temp files
-@unlink($zip_path);
 @unlink($csv_books_path);
 @unlink($csv_authors_path);
 @unlink($csv_publishers_path);
 @unlink($csv_subjects_path);
 @unlink($csv_ba_path);
 @unlink($csv_bs_path);
+
+if ($server_side) {
+    error_log(sprintf(
+        'BookCatalog backup completed: type=%s mode=%s file=%s size=%d bytes',
+        'full',
+        'server',
+        $filename ?? '-',
+        $size_bytes
+    ));
+    json_out([
+        'ok' => true,
+        'mode' => 'server',
+        'dir' => $backup_dir,
+        'filename' => $filename,
+        'path' => $zip_path,
+    ]);
+}
+
+header('Content-Type: application/zip');
+header('Content-Disposition: attachment; filename="' . $filename . '"');
+header('Content-Length: ' . filesize($zip_path));
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+readfile($zip_path);
+
+error_log(sprintf(
+    'BookCatalog backup completed: type=%s mode=%s file=%s size=%d bytes',
+    'full',
+    'download',
+    $filename ?? '-',
+    $size_bytes
+));
+
+@unlink($zip_path);

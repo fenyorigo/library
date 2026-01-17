@@ -12,6 +12,26 @@ ini_set('memory_limit', '512M');
 set_time_limit(600);
 ignore_user_abort(true);
 
+$backup_status = catalog_backup_dir_status();
+$check_mode = isset($_GET['check']) && $_GET['check'] === '1';
+
+if ($check_mode) {
+    if (!$backup_status['enabled']) {
+        json_out(['ok' => true, 'mode' => 'stream']);
+    }
+    if ($backup_status['status'] !== 'ready') {
+        json_fail(catalog_backup_dir_error($backup_status), 500);
+    }
+    json_out(['ok' => true, 'mode' => 'server', 'dir' => $backup_status['dir']]);
+}
+
+if ($backup_status['enabled'] && $backup_status['status'] !== 'ready') {
+    json_fail(catalog_backup_dir_error($backup_status), 500);
+}
+
+$server_side = $backup_status['enabled'] && $backup_status['status'] === 'ready';
+$backup_dir = $backup_status['dir'] ?? '';
+
 if (PHP_OS_FAMILY === 'Darwin') {
     $os_label = 'macos';
 } elseif (PHP_OS_FAMILY === 'Linux') {
@@ -42,12 +62,16 @@ if ($pkg_raw !== false) {
 $uploads_dir = realpath(__DIR__ . '/uploads') ?: (__DIR__ . '/uploads');
 $file_count = 0;
 $errors = [];
+$timestamp = date('Ymd_His');
 
 if (!class_exists('ZipArchive')) {
     json_fail('ZipArchive not available in PHP runtime', 500);
 }
 
 $tmp_candidates = [sys_get_temp_dir(), '/tmp', $uploads_dir, __DIR__];
+if ($server_side && $backup_dir !== '') {
+    array_unshift($tmp_candidates, $backup_dir);
+}
 $tmp_root = '';
 foreach ($tmp_candidates as $dir) {
     if (is_dir($dir) && is_writable($dir)) {
@@ -59,7 +83,7 @@ if ($tmp_root === '') {
     json_fail('No writable temp directory available for zip', 500);
 }
 
-$zip_path = rtrim($tmp_root, '/\\') . '/bookcatalog_covers_' . date('Ymd_His') . '.zip';
+$zip_path = rtrim($tmp_root, '/\\') . '/bookcatalog_covers_' . $timestamp . '.zip';
 $zip = new ZipArchive();
 if ($zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
     error_log('export_covers_zip.php: Zip open failed for ' . $zip_path);
@@ -108,16 +132,40 @@ if ($errors) {
 
 $zip->close();
 
-$timestamp = date('Ymd_His');
 $suffix_parts = array_filter([$os_label, $app_version]);
 $suffix = $suffix_parts ? '_' . implode('_', $suffix_parts) : '';
 $export_name = "export_{$file_count}_covers_{$timestamp}{$suffix}.zip";
 $export_name = preg_replace('/[^A-Za-z0-9._-]/', '_', $export_name);
 
+if ($server_side) {
+    $final_path = rtrim($backup_dir, "/\\") . '/' . $export_name;
+    if (!@rename($zip_path, $final_path)) {
+        @unlink($zip_path);
+        json_fail('Failed to move zip into backup directory', 500);
+    }
+    clearstatcache(true, $final_path);
+    $size_bytes = is_file($final_path) ? (int)filesize($final_path) : 0;
+    error_log(sprintf(
+        'BookCatalog backup completed: type=%s mode=%s file=%s size=%d bytes',
+        'covers',
+        'server',
+        $export_name ?? '-',
+        $size_bytes
+    ));
+    json_out([
+        'ok' => true,
+        'mode' => 'server',
+        'dir' => $backup_dir,
+        'filename' => $export_name,
+        'path' => $final_path,
+    ]);
+}
+
 clearstatcache(true, $zip_path);
 if (!is_file($zip_path) || !is_readable($zip_path)) {
     json_fail('Zip missing or unreadable', 500);
 }
+$size_bytes = (int)filesize($zip_path);
 
 header('Content-Type: application/zip');
 header('Content-Disposition: attachment; filename="' . $export_name . '"');
@@ -138,5 +186,13 @@ while (!feof($fh)) {
     echo $chunk;
 }
 fclose($fh);
+
+error_log(sprintf(
+    'BookCatalog backup completed: type=%s mode=%s file=%s size=%d bytes',
+    'covers',
+    'download',
+    $export_name ?? '-',
+    $size_bytes
+));
 
 @unlink($zip_path);

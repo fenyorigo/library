@@ -8,6 +8,26 @@ require_login();
 error_reporting(E_ALL & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 
+$backup_status = catalog_backup_dir_status();
+$check_mode = isset($_GET['check']) && $_GET['check'] === '1';
+
+if ($check_mode) {
+    if (!$backup_status['enabled']) {
+        json_out(['ok' => true, 'mode' => 'stream']);
+    }
+    if ($backup_status['status'] !== 'ready') {
+        json_fail(catalog_backup_dir_error($backup_status), 500);
+    }
+    json_out(['ok' => true, 'mode' => 'server', 'dir' => $backup_status['dir']]);
+}
+
+if ($backup_status['enabled'] && $backup_status['status'] !== 'ready') {
+    json_fail(catalog_backup_dir_error($backup_status), 500);
+}
+
+$server_side = $backup_status['enabled'] && $backup_status['status'] === 'ready';
+$backup_dir = $backup_status['dir'] ?? '';
+
 $pdo = pdo();
 
 try {
@@ -63,9 +83,11 @@ $suffix = $suffix_parts ? '_' . implode('_', $suffix_parts) : '';
 $export_name = "export_{$total_books}_books_{$timestamp}{$suffix}.csv";
 $export_name = preg_replace('/[^A-Za-z0-9._-]/', '_', $export_name);
 
-header('Content-Type: text/csv; charset=utf-8');
-header('Content-Disposition: attachment; filename="' . $export_name . '"');
-header('Cache-Control: no-store');
+if (!$server_side) {
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="' . $export_name . '"');
+    header('Cache-Control: no-store');
+}
 
 /**
  * Inputs:
@@ -192,19 +214,28 @@ try {
 }
 
 /** CSV output */
-$out = fopen('php://output', 'w');
+$out_path = $server_side ? rtrim($backup_dir, "/\\") . '/' . $export_name : '';
+$out = $server_side
+    ? fopen($out_path, 'w')
+    : fopen('php://output', 'w');
+
+if ($out === false) {
+    json_fail('Failed to open export target for writing', 500);
+}
 
 /* Fix PHP 8.1+ deprecation: explicitly pass escape char */
-fputcsv($out, [
+$bytes_written = 0;
+$bytes = fputcsv($out, [
     'ID', 'Title', 'Subtitle', 'Series', 'Year', 'ISBN', 'LCCN',
     'Publisher', 'Authors', 'Subjects', 'Loaned To', 'Loaned Date',
     'Bookcase', 'Shelf', 'Cover Image', 'Cover Filename'
 ], ',', '"', "\\");
+$bytes_written += is_int($bytes) ? $bytes : 0;
 
 foreach ($rows as $r) {
     $cover_fn = $r['cover_image'] ? basename($r['cover_image']) : '';
 
-    fputcsv($out, [
+    $bytes = fputcsv($out, [
         $r['id'],
         $r['title'],
         $r['subtitle'],
@@ -222,6 +253,34 @@ foreach ($rows as $r) {
         $r['cover_image'],
         $cover_fn,                    // <--- NEW FINAL COLUMN
     ], ',', '"', "\\");
+    $bytes_written += is_int($bytes) ? $bytes : 0;
 }
 
 fclose($out);
+
+if ($server_side) {
+    clearstatcache(true, $out_path);
+    $size_bytes = is_file($out_path) ? (int)filesize($out_path) : $bytes_written;
+    error_log(sprintf(
+        'BookCatalog backup completed: type=%s mode=%s file=%s size=%d bytes',
+        'csv',
+        'server',
+        $export_name ?? '-',
+        $size_bytes
+    ));
+    json_out([
+        'ok' => true,
+        'mode' => 'server',
+        'dir' => $backup_dir,
+        'filename' => $export_name,
+        'path' => $out_path,
+    ]);
+}
+
+error_log(sprintf(
+    'BookCatalog backup completed: type=%s mode=%s file=%s size=%d bytes',
+    'csv',
+    'download',
+    $export_name ?? '-',
+    $bytes_written
+));

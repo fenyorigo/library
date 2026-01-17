@@ -212,6 +212,40 @@ function utf8_clean(string $s): string {
     return ($out !== false) ? $out : $s;
 }
 
+function catalog_backup_dir_status(): array {
+    $raw = getenv('CATALOG_BACKUP_DIR');
+    $dir = $raw !== false ? trim((string)$raw) : '';
+    if ($dir === '') {
+        return ['enabled' => false, 'status' => 'disabled', 'dir' => ''];
+    }
+    $dir = rtrim($dir, "/\\");
+    if (!file_exists($dir)) {
+        return ['enabled' => true, 'status' => 'missing', 'dir' => $dir];
+    }
+    if (!is_dir($dir)) {
+        return ['enabled' => true, 'status' => 'not_dir', 'dir' => $dir];
+    }
+    if (!is_writable($dir)) {
+        return ['enabled' => true, 'status' => 'not_writable', 'dir' => $dir];
+    }
+    return ['enabled' => true, 'status' => 'ready', 'dir' => $dir];
+}
+
+function catalog_backup_dir_error(array $status): string {
+    $dir = $status['dir'] ?? '';
+    $base = "CATALOG_BACKUP_DIR is set to '{$dir}'";
+    switch ($status['status'] ?? '') {
+        case 'missing':
+            return $base . ", but it does not exist. Fix it or remove the env var for streaming mode.";
+        case 'not_dir':
+            return $base . ", but it is not a directory. Fix it or remove the env var for streaming mode.";
+        case 'not_writable':
+            return $base . ", but it is not writable by the web server. Fix it or remove the env var for streaming mode.";
+        default:
+            return "CATALOG_BACKUP_DIR is not usable. Fix it or remove the env var for streaming mode.";
+    }
+}
+
 function auth_event_request_meta(): array {
     $cf_ip = trim((string)($_SERVER['HTTP_CF_CONNECTING_IP'] ?? ''));
     $remote_ip = trim((string)($_SERVER['REMOTE_ADDR'] ?? ''));

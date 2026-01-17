@@ -266,7 +266,7 @@ try {
     fail('Schema creation failed: ' . $e->getMessage());
 }
 
-$app_version = '2.3.0 (installer build)';
+$app_version = '2.3.2 (installer build)';
 $schema_version = '2.2.0';
 $install_date = gmdate('c');
 

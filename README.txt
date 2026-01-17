@@ -3,3 +3,4 @@ It can import/export data compatible with v2.2.0 dumps/csv.
 Config is external via BOOKCATALOG_CONFIG.”
 	•	v2.3.0 schema includes SystemInfo
 	•	consumes v2.2.0 dumps/csv
+	•	v2.3.2 – Added admin-only duplicate candidates report to assist with catalog cleanup and collection curation

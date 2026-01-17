@@ -60,6 +60,7 @@
         <button v-if="isAdmin" @click="openAuthorsMaintenance">Authors</button>
         <button v-if="isAdmin" @click="openUserManagement">Users</button>
         <button v-if="isAdmin" @click="openOrphanMaintenance">Orphan maintenance</button>
+        <button v-if="isAdmin" @click="openDuplicateCandidates">Duplicate candidates</button>
         <button v-if="isAdmin" @click="openAuthLogs">Logs</button>
       </div>
     </section>
@@ -717,6 +718,12 @@ const openCsvImport = () => {
 const openOrphanMaintenance = () => {
   if (!ensureAdmin()) return;
   showOrphanMaintenance.value = true;
+};
+
+const openDuplicateCandidates = () => {
+  if (!ensureAdmin()) return;
+  const url = buildBackupUrl("duplicate_candidates.php", { status: "NEW" });
+  window.location.href = url.toString();
 };
 
 const openAuthorsMaintenance = () => {

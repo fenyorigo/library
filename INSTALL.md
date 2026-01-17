@@ -21,6 +21,11 @@ The quick cleanup path:
 ./cleanup.sh
 ```
 Note: `cleanup.sh` uses the current repo path by default. Override with `ROOT=/var/www/library ./cleanup.sh` on Fedora.
+Alternative (content-only) cleanup:
+```bash
+./clean_books_content.sh
+```
+Use this when you want to keep users/auth logs/system info and only clear catalog content before a CSV import.
 Manual cleanup steps (if needed):
 1. Drop the local database (default `books`).
 2. Remove local data/build/config files:

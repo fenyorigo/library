@@ -9,6 +9,8 @@ declare(strict_types=1);
 error_reporting(E_ALL & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 
+const SCHEMA_VERSION = '2.3.3';
+
 /* --------------------------- Error helpers --------------------------- */
 
 function json_error(string $msg, int $code = 500): void {
@@ -118,6 +120,19 @@ function auth_events_table_exists(PDO $pdo): bool {
     return $exists;
 }
 
+function system_info_table_exists(PDO $pdo): bool {
+    static $exists = null;
+    if ($exists !== null) return $exists;
+
+    $st = $pdo->query("
+        SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'SystemInfo'
+    ");
+    $exists = (int)$st->fetchColumn() > 0;
+    return $exists;
+}
+
 function count_active_admins(PDO $pdo): int {
     $st = $pdo->query("SELECT COUNT(*) FROM Users WHERE role = 'admin' AND is_active = 1");
     return (int)$st->fetchColumn();
@@ -210,6 +225,63 @@ function pdo(): PDO {
 function utf8_clean(string $s): string {
     $out = @iconv('UTF-8', 'UTF-8//IGNORE', $s);
     return ($out !== false) ? $out : $s;
+}
+
+function current_app_version(): ?string {
+    $pkg_path = dirname(__DIR__) . '/frontend/package.json';
+    $pkg_raw = @file_get_contents($pkg_path);
+    if ($pkg_raw === false) return null;
+
+    $pkg = json_decode($pkg_raw, true);
+    if (!is_array($pkg) || empty($pkg['version'])) return null;
+
+    return trim((string)$pkg['version']);
+}
+
+function sync_systeminfo_app_version(PDO $pdo): void {
+    try {
+        if (!system_info_table_exists($pdo)) return;
+
+        $app_version = current_app_version();
+        if ($app_version === null || $app_version === '') return;
+
+        $st = $pdo->prepare("SELECT value FROM SystemInfo WHERE key_name = 'app_version' LIMIT 1");
+        $st->execute();
+        $current = $st->fetchColumn();
+        if ($current === $app_version) return;
+
+        $up = $pdo->prepare("
+            INSERT INTO SystemInfo (key_name, value)
+            VALUES ('app_version', ?)
+            ON DUPLICATE KEY UPDATE value = VALUES(value)
+        ");
+        $up->execute([$app_version]);
+    } catch (Throwable $e) {
+        // Ignore version sync errors to avoid blocking login.
+    }
+}
+
+function sync_systeminfo_schema_version(PDO $pdo): void {
+    try {
+        if (!system_info_table_exists($pdo)) return;
+
+        $schema_version = trim((string)SCHEMA_VERSION);
+        if ($schema_version === '') return;
+
+        $st = $pdo->prepare("SELECT value FROM SystemInfo WHERE key_name = 'schema_version' LIMIT 1");
+        $st->execute();
+        $current = $st->fetchColumn();
+        if ($current === $schema_version) return;
+
+        $up = $pdo->prepare("
+            INSERT INTO SystemInfo (key_name, value)
+            VALUES ('schema_version', ?)
+            ON DUPLICATE KEY UPDATE value = VALUES(value)
+        ");
+        $up->execute([$schema_version]);
+    } catch (Throwable $e) {
+        // Ignore version sync errors to avoid blocking login.
+    }
 }
 
 function catalog_backup_dir_status(): array {

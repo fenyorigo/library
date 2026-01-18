@@ -59,6 +59,9 @@ try {
   $pdo->prepare("UPDATE Users SET last_login = NOW() WHERE user_id = ?")
       ->execute([$_SESSION['uid']]);
 
+  sync_systeminfo_app_version($pdo);
+  sync_systeminfo_schema_version($pdo);
+
   log_auth_event('login_success', (int)$_SESSION['uid'], (string)$_SESSION['username'], [
     'role' => (string)$_SESSION['role'],
   ]);

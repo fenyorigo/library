@@ -141,15 +141,8 @@ if (PHP_OS_FAMILY === 'Darwin') {
 }
 
 // Default to frontend package.json version when available.
-$app_version = '';
-$pkg_path = dirname(__DIR__) . '/frontend/package.json';
-$pkg_raw = @file_get_contents($pkg_path);
-if ($pkg_raw !== false) {
-    $pkg = json_decode($pkg_raw, true);
-    if (is_array($pkg) && !empty($pkg['version'])) {
-        $app_version = 'v' . $pkg['version'];
-    }
-}
+$app_version_raw = current_app_version();
+$app_version = $app_version_raw ? 'v' . $app_version_raw : '';
 
 $timestamp = date('Ymd_His');
 $suffix_parts = array_filter([$os_label, $app_version]);
@@ -166,6 +159,10 @@ if ($zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) 
 $generated_at = (new DateTimeImmutable('now'))->format(DateTimeInterface::ATOM);
 $meta = [
     'generated_at' => $generated_at,
+    'versions' => [
+        'app_version' => $app_version_raw,
+        'schema_version' => SCHEMA_VERSION,
+    ],
     'counts'  => [
         'books'      => count($books),
         'authors'    => count($authors),

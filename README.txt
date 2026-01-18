@@ -4,3 +4,4 @@ Config is external via BOOKCATALOG_CONFIG.”
 	•	v2.3.0 schema includes SystemInfo
 	•	consumes v2.2.0 dumps/csv
 	•	v2.3.2 – Added admin-only duplicate candidates report to assist with catalog cleanup and collection curation
+	•	v2.3.3 – Duplicate candidate logic updated (subtitle-aware, author sort-name based). Existing duplicate reviews must be reset.

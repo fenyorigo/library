@@ -45,6 +45,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+$normalize_sort_name = static function (string $name): string {
+    $n = trim($name);
+    $n = mb_strtolower($n, 'UTF-8');
+    $n = preg_replace('/\s+/u', ' ', $n);
+    return $n ?? '';
+};
+
 $normalize_title = static function (string $title): string {
     $t = trim($title);
     $t = mb_strtolower($t, 'UTF-8');
@@ -54,9 +61,24 @@ $normalize_title = static function (string $title): string {
     return $t ?? '';
 };
 
+$format_title_display = static function (string $title, ?string $subtitle): string {
+    $sub = trim((string)$subtitle);
+    if ($sub === '') return $title;
+    return $title . ': ' . $sub;
+};
+
+$author_sort_map = [];
+$author_rows = $pdo->query("SELECT author_id, sort_name FROM Authors")->fetchAll(PDO::FETCH_ASSOC);
+foreach ($author_rows as $row) {
+    $author_id = (int)$row['author_id'];
+    $sort_name = $normalize_sort_name((string)($row['sort_name'] ?? ''));
+    if ($sort_name === '') $sort_name = 'author#' . $author_id;
+    $author_sort_map[$author_id] = $sort_name;
+}
+
 $by_book = [];
 $rows = $pdo->query(
-    "SELECT b.book_id, b.title, ba.author_id
+    "SELECT b.book_id, b.title, b.subtitle, ba.author_id
      FROM Books b
      JOIN Books_Authors ba ON ba.book_id = b.book_id"
 )->fetchAll(PDO::FETCH_ASSOC);
@@ -64,10 +86,12 @@ $rows = $pdo->query(
 foreach ($rows as $row) {
     $book_id = (int)$row['book_id'];
     $title = (string)($row['title'] ?? '');
+    $subtitle = (string)($row['subtitle'] ?? '');
     $author_id = (int)$row['author_id'];
     if (!isset($by_book[$book_id])) {
         $by_book[$book_id] = [
             'title' => $title,
+            'subtitle' => $subtitle,
             'authors' => [],
         ];
     }
@@ -77,15 +101,24 @@ foreach ($rows as $row) {
 $groups = [];
 foreach ($by_book as $book_id => $info) {
     $author_ids = array_keys($info['authors']);
-    sort($author_ids, SORT_NUMERIC);
-    $authors_key = implode('-', $author_ids);
-    $title_key = $normalize_title($info['title']);
+    $author_names = [];
+    foreach ($author_ids as $author_id) {
+        $author_names[] = $author_sort_map[$author_id] ?? ('author#' . $author_id);
+    }
+    sort($author_names, SORT_STRING);
+    $authors_key = implode(';', $author_names);
+    $title_raw = $info['title'];
+    $subtitle = trim((string)$info['subtitle']);
+    if ($subtitle !== '') $title_raw .= '||' . $subtitle;
+    // Changing this logic invalidates existing duplicate_review keys.
+    $title_key = $normalize_title($title_raw);
     $dup_key = $title_key . '|' . $authors_key;
 
     if (!isset($groups[$dup_key])) {
         $groups[$dup_key] = [
             'dup_key' => $dup_key,
             'title' => $info['title'],
+            'subtitle' => $info['subtitle'],
             'book_ids' => [],
         ];
     }
@@ -169,7 +202,7 @@ if ($book_ids) {
     }
 
     $sql = "
-        SELECT b.book_id, b.title, b.year_published, b.isbn,
+        SELECT b.book_id, b.title, b.subtitle, b.year_published, b.isbn,
                b.publisher_id, p.name AS publisher_name,
                b.placement_id, pl.bookcase_no, pl.shelf_no,
                ba.author_id, ba.author_ord,
@@ -208,6 +241,7 @@ if ($book_ids) {
             $book_details[$book_id] = [
                 'book_id' => $book_id,
                 'title' => (string)($row['title'] ?? ''),
+                'subtitle' => (string)($row['subtitle'] ?? ''),
                 'year_published' => $row['year_published'] ?? null,
                 'isbn' => (string)($row['isbn'] ?? ''),
                 'publisher_name' => (string)($row['publisher_name'] ?? ''),
@@ -258,6 +292,88 @@ usort($sorted_groups, static function (array $a, array $b) use ($group_sort_year
 });
 
 $saved = isset($_GET['saved']) && (string)$_GET['saved'] !== '';
+$export_csv = isset($_GET['export']) && (string)$_GET['export'] === '1';
+
+if ($export_csv) {
+    $os_family = PHP_OS_FAMILY;
+    if (strcasecmp($os_family, 'Darwin') === 0) {
+        $os_family = 'macos';
+    }
+    $os_label = preg_replace('/[^A-Za-z0-9_-]+/', '', $os_family);
+    if ($os_label === '') $os_label = 'unknown';
+    $ts_label = gmdate('Ymd_His');
+    $status_label = preg_replace('/[^A-Za-z0-9_-]+/', '', strtoupper($status_filter));
+    if ($status_label === '') $status_label = 'UNKNOWN';
+    $filename = 'duplicate_candidates_' . $status_label . '_' . $os_label . '_' . $ts_label . '.csv';
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="' . $filename . '"');
+    $out = fopen('php://output', 'w');
+    fputcsv($out, [
+        'group_index',
+        'group_size',
+        'group_dup_key',
+        'group_status',
+        'group_note',
+        'group_title_display',
+        'group_authors_display',
+        'group_publishers',
+        'book_id',
+        'book_title',
+        'book_subtitle',
+        'book_authors',
+        'publisher_name',
+        'year_published',
+        'isbn',
+        'location',
+    ]);
+    $group_index = 0;
+    foreach ($sorted_groups as $group) {
+        $group_index++;
+        $book_ids = $group['book_ids'];
+        $first_id = $book_ids[0] ?? null;
+        $first_book = $first_id !== null && isset($book_details[$first_id]) ? $book_details[$first_id] : null;
+        $group_authors = $first_book ? implode('; ', $first_book['authors']) : '';
+        $group_title = $first_book
+            ? $format_title_display($first_book['title'], $first_book['subtitle'] ?? '')
+            : $format_title_display($group['title'], $group['subtitle'] ?? '');
+        $pub_pairs = [];
+        foreach ($book_ids as $book_id) {
+            $book = $book_details[$book_id] ?? null;
+            if (!$book) continue;
+            $pub = trim((string)($book['publisher_name'] ?? ''));
+            if ($pub === '') continue;
+            $year = $book['year_published'] ?? null;
+            $label = $pub;
+            if ($year !== null && $year !== '') $label .= ' (' . $year . ')';
+            $pub_pairs[$label] = true;
+        }
+        $group_publishers = implode(', ', array_keys($pub_pairs));
+        foreach ($book_ids as $book_id) {
+            $book = $book_details[$book_id] ?? null;
+            if (!$book) continue;
+            fputcsv($out, [
+                $group_index,
+                count($book_ids),
+                $group['dup_key'],
+                $group['status'],
+                $group['note'] ?? '',
+                $group_title,
+                $group_authors,
+                $group_publishers,
+                $book['book_id'],
+                $book['title'],
+                $book['subtitle'] ?? '',
+                implode('; ', $book['authors']),
+                $book['publisher_name'] ?? '',
+                $book['year_published'] ?? '',
+                $book['isbn'] ?? '',
+                $location_display($book),
+            ]);
+        }
+    }
+    fclose($out);
+    exit;
+}
 
 header('Content-Type: text/html; charset=utf-8');
 ?>
@@ -310,6 +426,7 @@ header('Content-Type: text/html; charset=utf-8');
     <?php $active = $status_filter === $st ? 'active' : ''; ?>
     <a class="<?php echo $active; ?>" href="duplicate_candidates.php?status=<?php echo urlencode($st); ?>"><?php echo htmlspecialchars($st, ENT_QUOTES, 'UTF-8'); ?></a>
   <?php endforeach; ?>
+  · <a href="duplicate_candidates.php?status=<?php echo urlencode($status_filter); ?>&export=1">Export CSV</a>
 </div>
 
 <?php if (!$sorted_groups): ?>
@@ -321,7 +438,9 @@ header('Content-Type: text/html; charset=utf-8');
       $first_id = $book_ids[0] ?? null;
       $first_book = $first_id !== null && isset($book_details[$first_id]) ? $book_details[$first_id] : null;
       $authors_display = $first_book ? implode('; ', $first_book['authors']) : '';
-      $title_display = $first_book ? $first_book['title'] : $group['title'];
+      $title_display = $first_book
+        ? $format_title_display($first_book['title'], $first_book['subtitle'] ?? '')
+        : $format_title_display($group['title'], $group['subtitle'] ?? '');
       $count = count($book_ids);
       $pub_pairs = [];
       foreach ($book_ids as $book_id) {
@@ -387,7 +506,7 @@ header('Content-Type: text/html; charset=utf-8');
             <?php if (!$book) continue; ?>
             <tr>
               <td><?php echo (int)$book['book_id']; ?></td>
-              <td><?php echo htmlspecialchars($book['title'], ENT_QUOTES, 'UTF-8'); ?></td>
+              <td><?php echo htmlspecialchars($format_title_display($book['title'], $book['subtitle'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
               <td><?php echo htmlspecialchars(implode('; ', $book['authors']), ENT_QUOTES, 'UTF-8'); ?></td>
               <td><?php echo htmlspecialchars($book['publisher_name'], ENT_QUOTES, 'UTF-8'); ?></td>
               <td><?php echo htmlspecialchars((string)($book['year_published'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>

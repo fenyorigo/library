@@ -101,7 +101,7 @@ try {
     $semi_norm = array_map($normalize_header, $semi_fields);
 
     $export_keys = [
-        'id','title','subtitle','series','year','isbn','lccn','publisher','authors','subjects',
+        'id','title','subtitle','series','year','isbn','lccn','notes','publisher','authors','subjects',
         'loaned_to','loaned_date','bookcase','shelf','cover_image','cover_filename'
     ];
     $legacy_keys = ['title','subtitle','year_published','authors'];
@@ -201,6 +201,7 @@ try {
             $publisher_id = null;
             $isbn = null;
             $lccn = null;
+            $notes = null;
             $placement_id = null;
             $loaned_to = null;
             $loaned_date = null;
@@ -214,6 +215,7 @@ try {
             $year = $normalize_year($data['year'] ?? ($data['year_published'] ?? null));
             $isbn = N($data['isbn'] ?? null);
             $lccn = N($data['lccn'] ?? null);
+            $notes = N($data['notes'] ?? null);
             $publisher_id = getPublisherId($pdo, N($data['publisher'] ?? null));
             $authors_csv = N($data['authors'] ?? null);
             $subjects_csv = N($data['subjects'] ?? null);
@@ -267,9 +269,9 @@ try {
                 $stmt = $pdo->prepare("
         INSERT INTO Books
           (book_id, title, subtitle, series, publisher_id, year_published,
-           isbn, lccn, cover_image, cover_thumb, placement_id,
+           isbn, lccn, notes, cover_image, cover_thumb, placement_id,
            loaned_to, loaned_date)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ");
                 $stmt->execute([
                     $id_in,
@@ -280,6 +282,7 @@ try {
                     $year,
                     $isbn,
                     $lccn,
+                    $notes,
                     null,
                     null,
                     $placement_id,
@@ -291,9 +294,9 @@ try {
                 $stmt = $pdo->prepare("
         INSERT INTO Books
           (title, subtitle, series, publisher_id, year_published,
-           isbn, lccn, cover_image, cover_thumb, placement_id,
+           isbn, lccn, notes, cover_image, cover_thumb, placement_id,
            loaned_to, loaned_date)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
       ");
                 $stmt->execute([
                     $title,
@@ -303,6 +306,7 @@ try {
                     $year,
                     $isbn,
                     $lccn,
+                    $notes,
                     null,
                     null,
                     $placement_id,

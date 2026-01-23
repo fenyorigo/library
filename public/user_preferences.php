@@ -162,6 +162,7 @@ try {
   [$show_loaned_to_set, $show_loaned_to] = read_pref_bool($data, 'show_loaned_to');
   [$show_loaned_date_set, $show_loaned_date] = read_pref_bool($data, 'show_loaned_date');
   [$show_subjects_set, $show_subjects] = read_pref_bool($data, 'show_subjects');
+  [$show_notes_set, $show_notes] = read_pref_bool($data, 'show_notes');
 
   $per_page = null;
   if ($per_page_raw !== null && $per_page_raw !== '') {
@@ -204,13 +205,13 @@ try {
   $pdo = pdo();
   $sql = "INSERT INTO UserPreferences
           (user_id, logo_path, bg_color, fg_color, text_size, per_page,
-           show_cover, show_subtitle, show_series, show_is_hungarian, show_publisher,
-           show_year, show_status, show_placement, show_isbn, show_loaned_to,
-           show_loaned_date, show_subjects, updated_at)
+          show_cover, show_subtitle, show_series, show_is_hungarian, show_publisher,
+          show_year, show_status, show_placement, show_isbn, show_loaned_to,
+           show_loaned_date, show_subjects, show_notes, updated_at)
           VALUES (:uid, :logo_ins, :bg_ins, :fg_ins, :ts_ins, :per_ins,
            :show_cover_ins, :show_subtitle_ins, :show_series_ins, :show_is_hungarian_ins, :show_publisher_ins,
            :show_year_ins, :show_status_ins, :show_placement_ins, :show_isbn_ins, :show_loaned_to_ins,
-           :show_loaned_date_ins, :show_subjects_ins, NOW())
+           :show_loaned_date_ins, :show_subjects_ins, :show_notes_ins, NOW())
           ON DUPLICATE KEY UPDATE
             logo_path = IF(:logo_set, :logo_upd, logo_path),
             bg_color = IF(:bg_set, :bg_upd, bg_color),
@@ -229,6 +230,7 @@ try {
             show_loaned_to = IF(:show_loaned_to_set, :show_loaned_to_upd, show_loaned_to),
             show_loaned_date = IF(:show_loaned_date_set, :show_loaned_date_upd, show_loaned_date),
             show_subjects = IF(:show_subjects_set, :show_subjects_upd, show_subjects),
+            show_notes = IF(:show_notes_set, :show_notes_upd, show_notes),
             updated_at = NOW()";
 
   $logo_set = ($logo_path !== null);
@@ -247,6 +249,7 @@ try {
     'show_loaned_to' => 0,
     'show_loaned_date' => 0,
     'show_subjects' => 0,
+    'show_notes' => 0,
   ];
 
   $st = $pdo->prepare($sql);
@@ -269,6 +272,7 @@ try {
     ':show_loaned_to_ins' => $show_loaned_to ?? $defaults['show_loaned_to'],
     ':show_loaned_date_ins' => $show_loaned_date ?? $defaults['show_loaned_date'],
     ':show_subjects_ins' => $show_subjects ?? $defaults['show_subjects'],
+    ':show_notes_ins' => $show_notes ?? $defaults['show_notes'],
     ':logo_set' => $logo_set ? 1 : 0,
     ':logo_upd' => $logo_for_db,
     ':bg_set' => $bg_set ? 1 : 0,
@@ -303,6 +307,8 @@ try {
     ':show_loaned_date_upd' => $show_loaned_date,
     ':show_subjects_set' => $show_subjects_set ? 1 : 0,
     ':show_subjects_upd' => $show_subjects,
+    ':show_notes_set' => $show_notes_set ? 1 : 0,
+    ':show_notes_upd' => $show_notes,
   ]);
 
   $prefs = fetch_user_preferences($pdo, $uid);

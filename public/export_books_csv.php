@@ -108,6 +108,7 @@ $sortable = [
     'year'      => 'b.year_published',
     'authors'   => "CASE WHEN authors IS NULL THEN 1 ELSE 0 END, authors",
     'bookcase'  => 'pl.bookcase_no, pl.shelf_no',
+    'notes'     => 'b.notes',
 ];
 $order_by = $sortable[$sort_in] ?? $sortable['title'];
 
@@ -165,6 +166,7 @@ SELECT
   b.title, b.subtitle, b.series,
   b.year_published,
   b.isbn, b.lccn,
+  b.notes,
   b.loaned_to, b.loaned_date,
   b.cover_image,
   p.name AS publisher,
@@ -226,7 +228,7 @@ if ($out === false) {
 /* Fix PHP 8.1+ deprecation: explicitly pass escape char */
 $bytes_written = 0;
 $bytes = fputcsv($out, [
-    'ID', 'Title', 'Subtitle', 'Series', 'Year', 'ISBN', 'LCCN',
+    'ID', 'Title', 'Subtitle', 'Series', 'Year', 'ISBN', 'LCCN', 'Notes',
     'Publisher', 'Authors', 'Subjects', 'Loaned To', 'Loaned Date',
     'Bookcase', 'Shelf', 'Cover Image', 'Cover Filename'
 ], ',', '"', "\\");
@@ -243,6 +245,7 @@ foreach ($rows as $r) {
         $r['year_published'],
         $r['isbn'],
         $r['lccn'],
+        $r['notes'],
         $r['publisher'],
         $r['authors'],
         $r['subjects'],

@@ -9,7 +9,7 @@ declare(strict_types=1);
 error_reporting(E_ALL & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 
-const SCHEMA_VERSION = '2.3.3';
+const SCHEMA_VERSION = '2.3.4';
 
 /* --------------------------- Error helpers --------------------------- */
 
@@ -407,6 +407,7 @@ function normalize_user_preferences(array $row): array {
         'show_loaned_to' => $bool($row['show_loaned_to'] ?? null, false),
         'show_loaned_date' => $bool($row['show_loaned_date'] ?? null, false),
         'show_subjects' => $bool($row['show_subjects'] ?? null, false),
+        'show_notes' => $bool($row['show_notes'] ?? null, false),
     ];
 }
 
@@ -414,7 +415,7 @@ function fetch_user_preferences(PDO $pdo, int $user_id): array {
     $st = $pdo->prepare("SELECT logo_path, bg_color, fg_color, text_size, per_page,
                                 show_cover, show_subtitle, show_series, show_is_hungarian,
                                 show_publisher, show_year, show_status, show_placement,
-                                show_isbn, show_loaned_to, show_loaned_date, show_subjects
+                                show_isbn, show_loaned_to, show_loaned_date, show_subjects, show_notes
                          FROM UserPreferences
                          WHERE user_id = ? LIMIT 1");
     $st->execute([$user_id]);
@@ -438,6 +439,7 @@ function fetch_user_preferences(PDO $pdo, int $user_id): array {
             'show_loaned_to' => false,
             'show_loaned_date' => false,
             'show_subjects' => false,
+            'show_notes' => false,
         ];
     }
     return normalize_user_preferences($row);

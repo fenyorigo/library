@@ -29,6 +29,7 @@
             <div><strong>ISBN</strong><div>{{ book.isbn || "—" }}</div></div>
             <div><strong>LCCN</strong><div>{{ book.lccn || "—" }}</div></div>
             <div><strong>Subjects</strong><div>{{ book.subjects || "—" }}</div></div>
+            <div class="span-2"><strong>Notes</strong><div class="notes">{{ book.notes || "—" }}</div></div>
             <div>
               <strong>Placement</strong>
               <div v-if="book.bookcase_no!=null && book.shelf_no!=null">#{{ book.bookcase_no }}/{{ book.shelf_no }}</div>
@@ -98,6 +99,8 @@ onBeforeUnmount(() => {
 .close { font-size:1.5rem; line-height:1; background:none; border:none; cursor:pointer; }
 .muted { opacity:.75; margin:.25rem 0; }
 .meta-grid { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:.75rem 1rem; }
+.meta-grid .span-2 { grid-column: 1 / span 2; }
+.meta-grid .notes { white-space: pre-wrap; }
 .small { font-size: .9em; }
 .cover-img {
   width: 160px;

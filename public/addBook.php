@@ -63,6 +63,7 @@ try {
     $series   = N($d['series'] ?? null);
     $isbn     = N($d['isbn'] ?? null);
     $lccn     = N($d['lccn'] ?? null);
+    $notes    = N($d['notes'] ?? null);
     $loaned_to = N($d['loaned_to'] ?? null);
     $loaned_date = N($d['loaned_date'] ?? null);
     if ($loaned_to === null) {
@@ -102,9 +103,9 @@ try {
     $stmt = $pdo->prepare("
         INSERT INTO Books
           (title, subtitle, series, publisher_id, year_published,
-           isbn, lccn, cover_image, cover_thumb, placement_id,
+           isbn, lccn, notes, cover_image, cover_thumb, placement_id,
            loaned_to, loaned_date)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
     ");
     $stmt->execute([
         $title,
@@ -114,6 +115,7 @@ try {
         $year_published,
         $isbn,
         $lccn,
+        $notes,
         $cover_image_in,
         $cover_thumb_in,
         $placement_id,

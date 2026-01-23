@@ -129,6 +129,11 @@
               <span>Subjects</span><span class="chev">{{ chevron('subjects') }}</span>
             </button>
           </th>
+          <th v-if="columns.show_notes" :aria-sort="ariaSort('notes')">
+            <button class="th-btn" @click.prevent="toggleSort('notes')">
+              <span>Notes</span><span class="chev">{{ chevron('notes') }}</span>
+            </button>
+          </th>
 
           <th class="w-actions">Actions</th>
         </tr>
@@ -185,6 +190,7 @@
           <td v-if="columns.show_loaned_to" class="loaned-to-cell">{{ b.loaned_to || '—' }}</td>
           <td v-if="columns.show_loaned_date" class="loaned-date-cell">{{ b.loaned_date || '—' }}</td>
           <td v-if="columns.show_subjects" class="subjects-cell">{{ b.subjects || '—' }}</td>
+          <td v-if="columns.show_notes" class="notes-cell">{{ b.notes || '—' }}</td>
 
           <td class="actions">
             <button @click="emit('view', b)">View</button>
@@ -283,6 +289,7 @@ const columnDefaults = {
   show_loaned_to: false,
   show_loaned_date: false,
   show_subjects: false,
+  show_notes: false,
 };
 
 const columns = computed(() => {
@@ -423,7 +430,8 @@ thead th {
 .isbn-cell,
 .loaned-to-cell,
 .loaned-date-cell,
-.subjects-cell {
+.subjects-cell,
+.notes-cell {
   max-width: 300px;
   overflow: hidden;
   text-overflow: ellipsis;

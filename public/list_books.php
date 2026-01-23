@@ -16,7 +16,7 @@ $pdo = pdo();
  * - q:         free-text search (tokenized on whitespace)
  * - page:      1-based page index
  * - per:       page size (alias used by frontend)
- * - sort:      one of: id|title|subtitle|series|publisher|year|authors|authors_hu|bookcase|cover|status|isbn|loaned_to|loaned_date|subjects
+ * - sort:      one of: id|title|subtitle|series|publisher|year|authors|authors_hu|bookcase|cover|status|isbn|loaned_to|loaned_date|subjects|notes
  * - dir:       asc|desc (default: desc)
  */
 $q        = isset($_GET['q']) ? trim((string)$_GET['q']) : '';
@@ -48,6 +48,7 @@ $sortable = [
   'loaned_to' => 'b.loaned_to',
   'loaned_date' => 'b.loaned_date',
   'subjects'  => "CASE WHEN subjects IS NULL THEN 1 ELSE 0 END, subjects",
+  'notes'     => 'b.notes',
 ];
 $order_by = $sortable[$sort_in] ?? $sortable['id'];
 
@@ -143,6 +144,7 @@ SELECT
   b.title, b.subtitle, b.series,
   b.year_published,
   b.isbn, b.lccn,
+  b.notes,
   b.cover_image,
   b.cover_image AS cover_thumb,
   (b.cover_image IS NOT NULL AND b.cover_image <> '') AS has_cover,

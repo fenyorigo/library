@@ -40,6 +40,7 @@ try {
         'year_published',
         'isbn',
         'lccn',
+        'notes',
         'loaned_to',
         'loaned_date',
         'placement_id',

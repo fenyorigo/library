@@ -163,6 +163,11 @@
           <div v-if="readonly" class="ro span-3">{{ book.subjects || '—' }}</div>
           <input v-else class="span-3" v-model.trim="form.subjects" placeholder="Subject1; Subject2" />
 
+          <!-- Notes (full line) -->
+          <label>Notes</label>
+          <div v-if="readonly" class="ro span-3 prewrap">{{ book.notes || '—' }}</div>
+          <textarea v-else class="span-3" v-model="form.notes" rows="3" placeholder="Notes"></textarea>
+
           <!-- Added + Placement -->
           <label>Added</label>
           <div class="ro">{{ book.added_date || '—' }}</div>
@@ -279,6 +284,7 @@ const initForm = (b = {}, mode = "view") => {
       year_published: b.year_published ?? null,
       isbn: b.isbn || "",
       lccn: b.lccn || "",
+      notes: b.notes || "",
       authors: Array.isArray(b.authors) ? b.authors.join("; ") : (b.authors || ""),
       authors_is_hungarian: b.authors_hu_flag === 1,
       subjects: b.subjects || "",
@@ -298,6 +304,7 @@ const initForm = (b = {}, mode = "view") => {
     year_published: b.year_published ?? null,
     isbn: b.isbn || "",
     lccn: b.lccn || "",
+    notes: b.notes || "",
     authors: Array.isArray(b.authors) ? b.authors.join("; ") : (b.authors || ""),
     authors_is_hungarian: b.authors_hu_flag === 1,
     subjects: b.subjects || "",
@@ -587,6 +594,7 @@ const save = () => {
   };
 
   payload.subjects = (form.value.subjects || "").trim();
+  payload.notes = (form.value.notes || "").trim() || null;
   payload.loaned_to = (form.value.loaned_to || "").trim();
   payload.loaned_date = (form.value.loaned_date || "").trim() || null;
   if (!payload.loaned_to) {
@@ -752,7 +760,8 @@ const onDelete = async (type) => {
 .inline input { width: auto; }
 .inline span { white-space: nowrap; }
 .fields input,
-.fields select {
+.fields select,
+.fields textarea {
   padding: .5rem .6rem;
   border: 1px solid rgba(0,0,0,.2);
   border-radius: 6px;
@@ -779,6 +788,7 @@ const onDelete = async (type) => {
 }
 
 .ro { padding: .2rem 0; }
+.prewrap { white-space: pre-wrap; }
 
 @media (max-width: 900px) {
   .fields {

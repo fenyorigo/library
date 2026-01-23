@@ -272,6 +272,7 @@ const preferences = ref({
   show_loaned_to: false,
   show_loaned_date: false,
   show_subjects: false,
+  show_notes: false,
 });
 const initialQueryParam = ref(null);
 const searchAutofillTimers = ref([]);
@@ -482,6 +483,7 @@ const resetPreferences = () => {
     show_loaned_to: false,
     show_loaned_date: false,
     show_subjects: false,
+    show_notes: false,
   };
   preferences.value = defaults;
   applyPreferences(defaults);

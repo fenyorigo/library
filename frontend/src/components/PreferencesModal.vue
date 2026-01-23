@@ -131,6 +131,10 @@
               <input type="checkbox" v-model="form.show_subjects" />
               Subjects
             </label>
+            <label class="inline">
+              <input type="checkbox" v-model="form.show_notes" />
+              Notes
+            </label>
           </div>
         </div>
 
@@ -176,6 +180,7 @@ const form = ref({
   show_loaned_to: false,
   show_loaned_date: false,
   show_subjects: false,
+  show_notes: false,
 });
 
 const objectUrl = ref("");
@@ -222,6 +227,7 @@ watch(
       show_loaned_to: typeof prefs?.show_loaned_to === "boolean" ? prefs.show_loaned_to : false,
       show_loaned_date: typeof prefs?.show_loaned_date === "boolean" ? prefs.show_loaned_date : false,
       show_subjects: typeof prefs?.show_subjects === "boolean" ? prefs.show_subjects : false,
+      show_notes: typeof prefs?.show_notes === "boolean" ? prefs.show_notes : false,
     };
     logoFile.value = null;
   },
@@ -280,6 +286,7 @@ const save = async () => {
       show_loaned_to: form.value.show_loaned_to,
       show_loaned_date: form.value.show_loaned_date,
       show_subjects: form.value.show_subjects,
+      show_notes: form.value.show_notes,
     };
     const res = await updateUserPreferences(payload, logoFile.value);
     const prefs = res?.data?.preferences || null;

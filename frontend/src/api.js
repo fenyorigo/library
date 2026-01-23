@@ -288,6 +288,7 @@ export async function updateUserPreferences(payload = {}, logoFile = null) {
   if (payload.show_loaned_to !== undefined) fd.append('show_loaned_to', payload.show_loaned_to ? '1' : '0');
   if (payload.show_loaned_date !== undefined) fd.append('show_loaned_date', payload.show_loaned_date ? '1' : '0');
   if (payload.show_subjects !== undefined) fd.append('show_subjects', payload.show_subjects ? '1' : '0');
+  if (payload.show_notes !== undefined) fd.append('show_notes', payload.show_notes ? '1' : '0');
   if (payload.remove_logo) fd.append('remove_logo', '1');
   if (logoFile) fd.append('logo', logoFile);
 

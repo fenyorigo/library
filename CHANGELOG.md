@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.5] - 2026-01-23
+### Added
+- Notes field for books (entry, display, list column toggle)
+
+### Changed
+- CSV import/export and backups now include book notes
+
 ## [2.3.4] - 2026-01-18
 ### Added
 - Status endpoint reports app and schema versions

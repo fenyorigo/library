@@ -54,7 +54,7 @@ $order_by = $sortable[$sort_in] ?? $sortable['id'];
 
 /**
  * Build WHERE from tokenized q (AND across tokens; each token matches multiple fields)
- * Fields matched: title, subtitle, series, authors (first/last/sort), publisher, isbn, lccn
+ * Fields matched: title, subtitle, series, authors (first/last/sort), publisher, isbn, lccn, notes
  *
  * IMPORTANT: Use **unique named placeholders** instead of positional `?` to avoid
  * HY093 mismatches across drivers / emulation settings.
@@ -75,6 +75,7 @@ if ($q !== '') {
       "t{$i}_series"  => $like,
       "t{$i}_isbn"    => $like,
       "t{$i}_lccn"    => $like,
+      "t{$i}_notes"   => $like,
       "t{$i}_pub"     => $like,
       "t{$i}_an"      => $like,
       "t{$i}_afn"     => $like,
@@ -88,6 +89,7 @@ if ($q !== '') {
       . "b.series LIKE :t{$i}_series OR "
       . "b.isbn LIKE :t{$i}_isbn OR "
       . "b.lccn LIKE :t{$i}_lccn OR "
+      . "b.notes LIKE :t{$i}_notes OR "
       . "p.name LIKE :t{$i}_pub OR "
       . "EXISTS ("
       . "  SELECT 1 FROM Books_Authors ba "

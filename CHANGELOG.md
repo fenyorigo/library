@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - CSV import/export and backups now include book notes
+- Book search now matches notes content
 
 ## [2.3.4] - 2026-01-18
 ### Added

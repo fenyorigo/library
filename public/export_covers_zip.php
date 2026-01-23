@@ -61,6 +61,7 @@ if ($pkg_raw !== false) {
 
 $uploads_dir = realpath(__DIR__ . '/uploads') ?: (__DIR__ . '/uploads');
 $file_count = 0;
+$cover_count = 0;
 $errors = [];
 $timestamp = date('Ymd_His');
 
@@ -90,6 +91,11 @@ if ($zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) 
     json_fail('Zip open failed', 500);
 }
 
+function is_thumb_rel(string $rel): bool {
+    $base = basename(str_replace('\\', '/', $rel));
+    return (bool)preg_match('/(?:^|-)thumb\.[a-z0-9]+$/i', $base);
+}
+
 if (is_dir($uploads_dir) && is_readable($uploads_dir)) {
     try {
         $it = new RecursiveIteratorIterator(
@@ -106,6 +112,9 @@ if (is_dir($uploads_dir) && is_readable($uploads_dir)) {
                 $errors[] = 'zip add failed: ' . $rel;
             }
             $file_count++;
+            if (!is_thumb_rel($rel)) {
+                $cover_count++;
+            }
         }
     } catch (Throwable $e) {
         $errors[] = 'uploads scan failed: ' . $e->getMessage();
@@ -134,7 +143,7 @@ $zip->close();
 
 $suffix_parts = array_filter([$os_label, $app_version]);
 $suffix = $suffix_parts ? '_' . implode('_', $suffix_parts) : '';
-$export_name = "export_{$file_count}_covers_{$timestamp}{$suffix}.zip";
+$export_name = "export_{$cover_count}_covers_{$timestamp}{$suffix}.zip";
 $export_name = preg_replace('/[^A-Za-z0-9._-]/', '_', $export_name);
 
 if ($server_side) {

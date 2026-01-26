@@ -207,7 +207,7 @@ export default {
       this.loading = true;
       try {
         const data = await fetchOrphanMaintenance();
-        const payload = data && data.data ? data.data : {};
+        const payload = (data && data.data) ? data.data : (data || {});
         this.orphanAuthors = (payload.orphan_authors || []) as OrphanAuthor[];
         this.orphanPublishers = (payload.orphan_publishers || []) as OrphanPublisher[];
         this.orphanLinks = (payload.orphan_links || []) as OrphanLink[];

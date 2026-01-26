@@ -11,6 +11,10 @@ All notable changes to this project will be documented in this file.
 - CSV import/export and backups now include book notes
 - Book search now matches notes content
 
+## [2.3.6] - 2026-01-26
+### Fixed
+- Orphan maintenance now displays orphan publishers correctly
+
 ## [2.3.4] - 2026-01-18
 ### Added
 - Status endpoint reports app and schema versions

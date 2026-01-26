@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [2.3.5] - 2026-01-23
 ### Added
 - Notes field for books (entry, display, list column toggle)
+- Maintenance SQL scripts for zero-width cleanup and NFC accent normalization
 
 ### Changed
 - CSV import/export and backups now include book notes

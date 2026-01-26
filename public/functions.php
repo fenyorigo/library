@@ -143,14 +143,28 @@ function count_admins(PDO $pdo): int {
     return (int)$st->fetchColumn();
 }
 
+function strip_invisible_format_chars(string $v): string {
+    $clean = preg_replace('/[\x{200B}\x{200C}\x{200D}\x{FEFF}\x{2060}]/u', '', $v);
+    return $clean === null ? $v : $clean;
+}
+
+function sanitize_csv_value($v) {
+    if (is_string($v)) {
+        return strip_invisible_format_chars($v);
+    }
+    return $v;
+}
+
 function N($v): ?string {
     if (!isset($v)) return null;
     if (is_string($v)) {
+        $v = strip_invisible_format_chars($v);
         $v = trim($v);
         return $v === '' ? null : $v;
     }
     if (is_scalar($v)) {
-        $v = trim((string)$v);
+        $v = strip_invisible_format_chars((string)$v);
+        $v = trim($v);
         return $v === '' ? null : $v;
     }
     return null;

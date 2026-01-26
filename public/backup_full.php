@@ -49,7 +49,10 @@ function write_csv(array $rows, array $header): string {
     foreach ($rows as $r) {
         // normalize row order to header
         $line = [];
-        foreach ($header as $col) { $line[] = $r[$col] ?? ''; }
+        foreach ($header as $col) {
+            $val = $r[$col] ?? '';
+            $line[] = sanitize_csv_value($val);
+        }
         fputcsv($h, $line, ',', '"', '\\');
     }
     fclose($h);

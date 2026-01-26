@@ -237,7 +237,7 @@ $bytes_written += is_int($bytes) ? $bytes : 0;
 foreach ($rows as $r) {
     $cover_fn = $r['cover_image'] ? basename($r['cover_image']) : '';
 
-    $bytes = fputcsv($out, [
+    $row = [
         $r['id'],
         $r['title'],
         $r['subtitle'],
@@ -255,7 +255,9 @@ foreach ($rows as $r) {
         $r['shelf_no'],
         $r['cover_image'],
         $cover_fn,                    // <--- NEW FINAL COLUMN
-    ], ',', '"', "\\");
+    ];
+    $row = array_map('sanitize_csv_value', $row);
+    $bytes = fputcsv($out, $row, ',', '"', "\\");
     $bytes_written += is_int($bytes) ? $bytes : 0;
 }
 

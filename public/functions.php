@@ -148,9 +148,17 @@ function strip_invisible_format_chars(string $v): string {
     return $clean === null ? $v : $clean;
 }
 
+function normalize_unicode_nfc(string $v): string {
+    if (class_exists('Normalizer')) {
+        $norm = Normalizer::normalize($v, Normalizer::FORM_C);
+        if (is_string($norm)) return $norm;
+    }
+    return $v;
+}
+
 function sanitize_csv_value($v) {
     if (is_string($v)) {
-        return strip_invisible_format_chars($v);
+        return normalize_unicode_nfc(strip_invisible_format_chars($v));
     }
     return $v;
 }
@@ -158,12 +166,12 @@ function sanitize_csv_value($v) {
 function N($v): ?string {
     if (!isset($v)) return null;
     if (is_string($v)) {
-        $v = strip_invisible_format_chars($v);
+        $v = normalize_unicode_nfc(strip_invisible_format_chars($v));
         $v = trim($v);
         return $v === '' ? null : $v;
     }
     if (is_scalar($v)) {
-        $v = strip_invisible_format_chars((string)$v);
+        $v = normalize_unicode_nfc(strip_invisible_format_chars((string)$v));
         $v = trim($v);
         return $v === '' ? null : $v;
     }

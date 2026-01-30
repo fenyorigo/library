@@ -782,3 +782,138 @@ function authorId(?string $author_name): ?int      { return getAuthorId(pdo(), $
 function attachAuthors(int $book_id, ?string $authors_csv, ?int $force_is_hungarian = null): void {
     attachAuthorsToBook(pdo(), $book_id, $authors_csv, $force_is_hungarian);
 }
+
+/* ------------------------- Cover uploads --------------------------- */
+
+function make_thumb(string $src, string $dst, int $max_w = 200): bool {
+    $max_w = max(1, (int)$max_w);
+
+    // Try Imagick first
+    if (class_exists('Imagick')) {
+        try {
+            $img = new Imagick();
+            $img->readImage($src);
+
+            // Validate geometry early
+            $w = $img->getImageWidth();
+            $h = $img->getImageHeight();
+            if ($w < 1 || $h < 1) {
+                $img->clear(); $img->destroy();
+                throw new RuntimeException("Invalid image geometry (w={$w}, h={$h})");
+            }
+
+            // Normalize colorspace / alpha
+            $img->setImageColorspace(Imagick::COLORSPACE_RGB);
+            $img->setBackgroundColor(new ImagickPixel('white'));
+            if (method_exists($img, 'setImageAlphaChannel')) {
+                $img->setImageAlphaChannel(Imagick::ALPHACHANNEL_REMOVE);
+            }
+
+            // Do not upscale small images
+            if ($w <= $max_w) {
+                $ok = $img->writeImage($dst);
+                $img->clear(); $img->destroy();
+                return (bool)$ok;
+            }
+
+            // Best-fit resize (keeps aspect)
+            $img->thumbnailImage($max_w, 0, true);
+            $ok = $img->writeImage($dst);
+            $img->clear(); $img->destroy();
+            return (bool)$ok;
+
+        } catch (Throwable $e) {
+            // Imagick failed → fall back to GD below
+        }
+    }
+
+    // GD fallback
+    $info = @getimagesize($src);
+    if (!$info) return false;
+
+    [$w, $h] = $info;
+    if ($w < 1 || $h < 1) return false;
+
+    $mime = $info['mime'];
+    switch ($mime) {
+        case 'image/jpeg': $im = imagecreatefromjpeg($src); break;
+        case 'image/png':  $im = imagecreatefrompng($src);  break;
+        case 'image/webp': $im = function_exists('imagecreatefromwebp') ? imagecreatefromwebp($src) : null; break;
+        default: $im = null;
+    }
+    if (!$im) return false;
+
+    if ($w <= $max_w) {
+        return @copy($src, $dst);
+    }
+
+    $new_w = min($max_w, $w);
+    $new_h = (int) round($h * $new_w / $w);
+
+    $dst_im = imagecreatetruecolor($new_w, $new_h);
+    imagealphablending($dst_im, false);
+    imagesavealpha($dst_im, true);
+    imagecopyresampled($dst_im, $im, 0, 0, 0, 0, $new_w, $new_h, $w, $h);
+
+    $ok = false;
+    switch ($mime) {
+        case 'image/jpeg': $ok = imagejpeg($dst_im, $dst, 85); break;
+        case 'image/png':  $ok = imagepng($dst_im,  $dst, 6);  break;
+        case 'image/webp': $ok = function_exists('imagewebp') ? imagewebp($dst_im, $dst, 85) : false; break;
+    }
+    return $ok;
+}
+
+function process_cover_upload(PDO $pdo, int $book_id, array $file, int $thumb_max_w = 200): array {
+    if ($book_id <= 0) {
+        throw new RuntimeException('Invalid book_id', 400);
+    }
+    if (empty($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+        throw new RuntimeException('No file uploaded or upload error', 400);
+    }
+
+    $tmp_path = (string)($file['tmp_name'] ?? '');
+    if ($tmp_path === '' || !is_uploaded_file($tmp_path)) {
+        throw new RuntimeException('Invalid upload', 400);
+    }
+
+    $finfo = new finfo(FILEINFO_MIME_TYPE);
+    $mime  = $finfo->file($tmp_path);
+    $allowed = ['image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp'];
+    if (!isset($allowed[$mime])) {
+        throw new RuntimeException('Unsupported file type', 415);
+    }
+    if ((int)($file['size'] ?? 0) > 10*1024*1024) {
+        throw new RuntimeException('File too large', 413);
+    }
+
+    $base_dir = __DIR__ . '/uploads/' . $book_id;
+    if (!is_dir($base_dir) && !mkdir($base_dir, 0775, true)) {
+        throw new RuntimeException('Unable to create upload directory');
+    }
+
+    foreach (glob($base_dir . "/cover*.*") ?: [] as $old) { @unlink($old); }
+    foreach (glob($base_dir . "/cover-thumb*.*") ?: [] as $old) { @unlink($old); }
+
+    $ext       = $allowed[$mime];
+    $cover_fs  = $base_dir . "/cover.$ext";
+    $thumb_fs  = $base_dir . "/cover-thumb.$ext";
+
+    if (!move_uploaded_file($tmp_path, $cover_fs)) {
+        throw new RuntimeException('Failed to move uploaded file');
+    }
+
+    $thumb_ok = make_thumb($cover_fs, $thumb_fs, $thumb_max_w);
+
+    $rel_img = 'uploads/' . $book_id . '/cover.' . $ext;
+    $rel_thm = $thumb_ok ? ('uploads/' . $book_id . '/cover-thumb.' . $ext) : null;
+
+    $upd = $pdo->prepare("UPDATE Books SET cover_image = ?, cover_thumb = ? WHERE book_id = ?");
+    $upd->execute([$rel_img, $rel_thm, $book_id]);
+
+    return [
+        'path' => $rel_img,
+        'thumb' => $rel_thm,
+        'affected_rows' => $upd->rowCount(),
+    ];
+}

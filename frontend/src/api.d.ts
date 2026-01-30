@@ -2,7 +2,7 @@ export function apiUrl(path: string): string;
 export function assetUrl(path: string): string;
 export function fetchBooks(params?: Record<string, unknown>): Promise<any>;
 export function fetchBook(id: number | string): Promise<any>;
-export function addBook(payload?: Record<string, unknown>): Promise<any>;
+export function addBook(payload?: Record<string, unknown>, coverFile?: File | null): Promise<any>;
 export function updateBook(payload?: Record<string, unknown>): Promise<any>;
 export function deleteBook(id: number | string): Promise<any>;
 export function suggestPublishers(q: string): Promise<any>;

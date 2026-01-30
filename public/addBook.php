@@ -31,7 +31,25 @@ try {
     }
 
     // --- parse body ---
-    $d = json_in();            // from functions.php
+    $content_type = (string)($_SERVER['CONTENT_TYPE'] ?? '');
+    $use_multipart = (!empty($_FILES) || stripos($content_type, 'multipart/form-data') !== false);
+    if ($use_multipart) {
+        $raw = $_POST['payload'] ?? null;
+        if ($raw !== null && $raw !== '') {
+            $d = json_decode((string)$raw, true);
+        } else {
+            $d = $_POST;
+            unset($d['payload']);
+            if (isset($d['bookcase_no']) || isset($d['shelf_no'])) {
+                $d['placement'] = [
+                    'bookcase_no' => $d['bookcase_no'] ?? null,
+                    'shelf_no' => $d['shelf_no'] ?? null,
+                ];
+            }
+        }
+    } else {
+        $d = json_in();            // from functions.php
+    }
     if (!is_array($d)) {
         if ($started_tx) $pdo->rollBack();
         json_fail('Invalid JSON body', 400);
@@ -148,10 +166,17 @@ try {
         }
     }
 
+    $cover_uploaded = false;
+    $cover_result = null;
+    if (!empty($_FILES['image']) && ($_FILES['image']['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK) {
+        $cover_result = process_cover_upload($pdo, $book_id, $_FILES['image']);
+        $cover_uploaded = true;
+    }
+
     // Auto-fill cover if uploads/<id>/cover.jpg already exists
     $uploads_dir = __DIR__ . '/uploads';
     $disk_cover  = $uploads_dir . '/' . $book_id . '/cover.jpg';
-    if (!$cover_image_in && is_file($disk_cover)) {
+    if (!$cover_image_in && !$cover_uploaded && is_file($disk_cover)) {
         $rel = 'uploads/' . $book_id . '/cover.jpg';
         $upd = $pdo->prepare("UPDATE Books SET cover_image=?, cover_thumb=? WHERE book_id=?");
         $upd->execute([$rel, $rel, $book_id]);
@@ -164,6 +189,8 @@ try {
         'data' => [
             'id' => $book_id,
             'affected_rows' => $stmt->rowCount(),
+            'cover_image' => $cover_result['path'] ?? null,
+            'cover_thumb' => $cover_result['thumb'] ?? null,
         ],
         'message' => 'Book created.',
     ], 201);
@@ -172,6 +199,10 @@ try {
     if (isset($pdo) && $pdo instanceof PDO && $pdo->inTransaction()) {
         // Only rollback if the TX is actually open
         $pdo->rollBack();
+    }
+    $code = (int)$e->getCode();
+    if ($code >= 400 && $code < 600) {
+        json_fail($e->getMessage(), $code);
     }
     json_fail('Insert failed: ' . $e->getMessage(), 500);
 }

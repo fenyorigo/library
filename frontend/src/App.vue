@@ -803,10 +803,10 @@ const onSaveDialog = async (updated) => {
   }
 };
 
-const onCreateDialog = async (payload) => {
+const onCreateDialog = async (payload, coverFile = null) => {
   if (!ensureAdmin()) return;
   try {
-    const res = await addBook(payload);
+    const res = await addBook(payload, coverFile);
     alert(res.message || "Book created.");
     onCloseDialog();
     await reload();

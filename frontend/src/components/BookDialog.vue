@@ -19,19 +19,26 @@
             <img v-else :src="coverSrc" alt="Cover image" />
             <div class="fn" v-if="coverFileName">{{ coverFileName }}</div>
 
-            <!-- Uploads only in edit mode (needs an existing book_id) -->
-            <div class="upload" v-if="mode === 'edit' && safeId && canManage">
+            <!-- Uploads (edit uploads immediately, create attaches on save) -->
+            <div class="upload" v-if="!readonly && canManage">
               <input
                 type="file"
                 accept="image/png,image/jpeg,image/webp"
-                @change="onUpload($event, 'cover')"
+                @change="mode === 'edit' ? onUpload($event, 'cover') : onCoverSelect($event)"
               />
               <button
-                v-if="book.cover_image || book.cover_thumb"
+                v-if="mode === 'edit' && (book.cover_image || book.cover_thumb)"
                 class="linklike"
                 @click.prevent="onDelete('cover')"
               >
                 Remove cover
+              </button>
+              <button
+                v-else-if="mode === 'create' && coverFile"
+                class="linklike"
+                @click.prevent="clearCoverSelection"
+              >
+                Clear selected cover
               </button>
             </div>
           </div>
@@ -334,6 +341,8 @@ const authorDraft = ref({
 const authorsHuTouched = ref(false);
 const coverImageOverride = ref(null);
 const coverThumbOverride = ref(null);
+const coverFile = ref(null);
+const coverPreview = ref(null);
 
 let pubTimer = null;
 let authorTimer = null;
@@ -353,18 +362,27 @@ const loanStatus = computed(() => {
 
 const coverSrc = computed(() => {
   const fallback = "uploads/default-cover.jpg";
-  const raw = coverThumbOverride.value
+  const raw = coverPreview.value
+    || coverThumbOverride.value
     || coverImageOverride.value
     || props.book?.cover_thumb
     || props.book?.cover_image
     || fallback;
+  if (raw && (raw.startsWith("blob:") || raw.startsWith("data:"))) return raw;
   return assetUrl(raw);
 });
 
 const coverFileName = computed(() => {
+  if (coverFile.value && coverFile.value.name) return coverFile.value.name;
   const p = coverThumbOverride.value || coverImageOverride.value || props.book?.cover_thumb || props.book?.cover_image;
   return p ? p.split("/").pop() : "default-cover.jpg (fallback)";
 });
+
+const resetCoverSelection = () => {
+  if (coverPreview.value) URL.revokeObjectURL(coverPreview.value);
+  coverPreview.value = null;
+  coverFile.value = null;
+};
 
 watch(
   () => props.book,
@@ -376,6 +394,7 @@ watch(
     showAuthorList.value = false;
     coverImageOverride.value = null;
     coverThumbOverride.value = null;
+    resetCoverSelection();
   },
   { deep: true, immediate: true }
 );
@@ -391,6 +410,7 @@ watch(
     authorsHuTouched.value = false;
     coverImageOverride.value = null;
     coverThumbOverride.value = null;
+    resetCoverSelection();
   },
   { immediate: true }
 );
@@ -405,6 +425,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKeydown);
+  resetCoverSelection();
 });
 
 const onPubInput = () => {
@@ -618,7 +639,7 @@ const save = () => {
       payload.authors = form.value.authors.trim();
       payload.authors_is_hungarian = !!form.value.authors_is_hungarian;
     }
-    emit("create", payload);
+    emit("create", payload, coverFile.value);
   } else {
     payload.authors = (form.value.authors || "").trim();
     if (authorsHuTouched.value || props.book.authors_hu_flag !== null) {
@@ -626,6 +647,19 @@ const save = () => {
     }
     emit("save", payload);
   }
+};
+
+const onCoverSelect = (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  resetCoverSelection();
+  coverFile.value = file;
+  coverPreview.value = URL.createObjectURL(file);
+  e.target.value = "";
+};
+
+const clearCoverSelection = () => {
+  resetCoverSelection();
 };
 
 const onUpload = async (e, type) => {

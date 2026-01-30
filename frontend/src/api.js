@@ -54,11 +54,23 @@ export async function fetchBook(id) {
 
 /* -------------------- CREATE -------------------- */
 
-export async function addBook(payload = {}) {
-  const res = await fetch(apiUrl('addBook.php'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
+export async function addBook(payload = {}, coverFile = null) {
+  if (coverFile) {
+    const fd = new FormData();
+    fd.append("payload", JSON.stringify(payload));
+    fd.append("image", coverFile);
+    const res = await fetch(apiUrl("addBook.php"), {
+      method: "POST",
+      body: fd,
+      credentials: "same-origin",
+    });
+    return parseJsonResponse(res);
+  }
+
+  const res = await fetch(apiUrl("addBook.php"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
     body: JSON.stringify(payload),
   });
 

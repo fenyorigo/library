@@ -19,8 +19,13 @@ try {
         json_fail('Invalid book_id', 400);
     }
 
+    $thumb_max_w = isset($_POST['thumb_max_w']) ? (int)$_POST['thumb_max_w'] : 0;
+    if ($thumb_max_w < 64 || $thumb_max_w > 4096) {
+        $thumb_max_w = 200;
+    }
+
     $pdo = pdo();
-    $cover = process_cover_upload($pdo, $book_id, $_FILES['image'] ?? []);
+    $cover = process_cover_upload($pdo, $book_id, $_FILES['image'] ?? [], $thumb_max_w);
 
     json_out([
         'ok' => true,

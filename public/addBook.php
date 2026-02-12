@@ -166,10 +166,15 @@ try {
         }
     }
 
+    $thumb_max_w = isset($d['thumb_max_w']) ? (int)$d['thumb_max_w'] : 0;
+    if ($thumb_max_w < 64 || $thumb_max_w > 4096) {
+        $thumb_max_w = 200;
+    }
+
     $cover_uploaded = false;
     $cover_result = null;
     if (!empty($_FILES['image']) && ($_FILES['image']['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK) {
-        $cover_result = process_cover_upload($pdo, $book_id, $_FILES['image']);
+        $cover_result = process_cover_upload($pdo, $book_id, $_FILES['image'], $thumb_max_w);
         $cover_uploaded = true;
     }
 

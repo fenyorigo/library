@@ -639,6 +639,9 @@ const save = () => {
       payload.authors = form.value.authors.trim();
       payload.authors_is_hungarian = !!form.value.authors_is_hungarian;
     }
+    if (coverFile.value) {
+      payload.thumb_max_w = browserThumbWidth();
+    }
     emit("create", payload, coverFile.value);
   } else {
     payload.authors = (form.value.authors || "").trim();
@@ -662,6 +665,13 @@ const clearCoverSelection = () => {
   resetCoverSelection();
 };
 
+const browserThumbWidth = () => {
+  if (typeof window === "undefined" || !window.innerWidth) return 200;
+  const dpr = Number.isFinite(window.devicePixelRatio) ? window.devicePixelRatio : 1;
+  const width = Math.round(window.innerWidth * dpr);
+  return Math.max(64, Math.min(4096, width));
+};
+
 const onUpload = async (e, type) => {
   try {
     const file = e.target.files && e.target.files[0];
@@ -672,6 +682,7 @@ const onUpload = async (e, type) => {
     fd.append("book_id", safeId.value);
     fd.append("type", type);
     fd.append("image", file);
+    fd.append("thumb_max_w", String(browserThumbWidth()));
 
     const res = await fetch(apiUrl("upload_image.php"), {
       method: "POST",

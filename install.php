@@ -120,6 +120,21 @@ function split_sql_statements(string $sql): array {
     return $statements;
 }
 
+function resolve_app_version_label(string $project_root): string {
+    $pkg_path = $project_root . '/frontend/package.json';
+    $pkg_raw = @file_get_contents($pkg_path);
+    if ($pkg_raw === false) {
+        return 'installer build';
+    }
+
+    $pkg = json_decode($pkg_raw, true);
+    if (!is_array($pkg) || empty($pkg['version'])) {
+        return 'installer build';
+    }
+
+    return trim((string)$pkg['version']) . ' (installer build)';
+}
+
 if (file_exists($config_path)) {
     fail('config.php already exists. Aborting to avoid overwriting credentials.');
 }
@@ -266,7 +281,7 @@ try {
     fail('Schema creation failed: ' . $e->getMessage());
 }
 
-$app_version = '2.4.1 (installer build)';
+$app_version = resolve_app_version_label($root);
 $schema_version = '2.2.0';
 $install_date = gmdate('c');
 

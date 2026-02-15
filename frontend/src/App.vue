@@ -222,7 +222,7 @@ import {
   apiUrl,
 } from "./api";
 import { useAuth } from "./composables/useAuth";
-import pkg from "../package.json";
+import { APP_VERSION_DISPLAY } from "./version";
 
 const rows = ref([]);
 const total = ref(0);
@@ -239,7 +239,7 @@ const selectedBook = ref(null);
 const showDialog = ref(false);
 const dialogMode = ref("view");
 const selected = ref(null);
-const appVersion = pkg.version ? `${pkg.version} (installer build)` : "";
+const appVersion = APP_VERSION_DISPLAY;
 const showCsvImport = ref(false);
 const showOrphanMaintenance = ref(false);
 const showAuthorsMaintenance = ref(false);

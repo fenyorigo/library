@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.2] - 2026-02-15
+### Changed
+- Version logic centralized
+
 ## [2.4.1] - 2026-02-15
 ### Changed
 - Changed method of loading env variables

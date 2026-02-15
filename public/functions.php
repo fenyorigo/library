@@ -184,42 +184,57 @@ function pdo(): PDO {
     static $pdo = null;
     if ($pdo instanceof PDO) return $pdo;
 
-    $env_path = getenv('BOOKCATALOG_CONFIG') ?: '';
-    $home = getenv('HOME') ?: '';
-    $default_path = $home !== '' ? $home . '/.config/config.php' : '';
-    $local_path = __DIR__ . '/../config.php';
+    // Prefer vhost SetEnv values for DB switchover (3306/3307); fallback to existing config loading.
+    $env_host = getenv('BOOKS_DB_HOST');
+    $env_name = getenv('BOOKS_DB_NAME');
+    $env_user = getenv('BOOKS_DB_USER');
+    $env_pass = getenv('BOOKS_DB_PASS');
 
-    $candidates = [];
-    if ($env_path !== '') $candidates[] = $env_path;
-    $candidates[] = $local_path;
-    if ($default_path !== '') $candidates[] = $default_path;
+    if ($env_host !== false && $env_name !== false && $env_user !== false && $env_pass !== false) {
+        $host = (string)$env_host;
+        $port = (int)(getenv('BOOKS_DB_PORT') ?: '3306');
+        $name = (string)$env_name;
+        $user = (string)$env_user;
+        $pass = (string)$env_pass;
+        $charset = (string)(getenv('BOOKS_DB_CHARSET') ?: 'utf8mb4');
+    } else {
+        $env_path = getenv('BOOKCATALOG_CONFIG') ?: '';
+        $home = getenv('HOME') ?: '';
+        $default_path = $home !== '' ? $home . '/.config/config.php' : '';
+        $local_path = __DIR__ . '/../config.php';
 
-    $config_path = null;
-    foreach ($candidates as $candidate) {
-        if ($candidate !== '' && is_readable($candidate)) {
-            $config_path = $candidate;
-            break;
+        $candidates = [];
+        if ($env_path !== '') $candidates[] = $env_path;
+        $candidates[] = $local_path;
+        if ($default_path !== '') $candidates[] = $default_path;
+
+        $config_path = null;
+        foreach ($candidates as $candidate) {
+            if ($candidate !== '' && is_readable($candidate)) {
+                $config_path = $candidate;
+                break;
+            }
         }
-    }
-    if ($config_path === null) {
-        throw new RuntimeException("Missing or unreadable config.php (set BOOKCATALOG_CONFIG, use ./config.php, or ~/.config/config.php)");
-    }
+        if ($config_path === null) {
+            throw new RuntimeException("Missing or unreadable config.php (set BOOKCATALOG_CONFIG, use ./config.php, or ~/.config/config.php)");
+        }
 
-    $cfg = require $config_path;
-    if (!is_array($cfg) || !isset($cfg['db']) || !is_array($cfg['db'])) {
-        throw new RuntimeException("config.php does not return ['db'=>...] array");
-    }
+        $cfg = require $config_path;
+        if (!is_array($cfg) || !isset($cfg['db']) || !is_array($cfg['db'])) {
+            throw new RuntimeException("config.php does not return ['db'=>...] array");
+        }
 
-    $db = $cfg['db'];
-    $host = $db['host'] ?? null;
-    $port = $db['port'] ?? 3306;
-    $name = $db['name'] ?? ($db['dbname'] ?? null);
-    $user = $db['user'] ?? null;
-    $pass = $db['pass'] ?? null;
-    $charset = $db['charset'] ?? 'utf8mb4';
+        $db = $cfg['db'];
+        $host = $db['host'] ?? null;
+        $port = $db['port'] ?? 3306;
+        $name = $db['name'] ?? ($db['dbname'] ?? null);
+        $user = $db['user'] ?? null;
+        $pass = $db['pass'] ?? null;
+        $charset = $db['charset'] ?? 'utf8mb4';
 
-    if (!$host || !$name || $user === null || $pass === null) {
-        throw new RuntimeException("config.php missing db.host, db.name, db.user, or db.pass");
+        if (!$host || !$name || $user === null || $pass === null) {
+            throw new RuntimeException("config.php missing db.host, db.name, db.user, or db.pass");
+        }
     }
 
     $dsn = sprintf(

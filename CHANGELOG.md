@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.1] - 2026-02-15
+### Changed
+- Changed method of loading env variables
+
 ## [2.3.5] - 2026-01-23
 ### Added
 - Notes field for books (entry, display, list column toggle)

@@ -1,4 +1,4 @@
-DirectoryIndex dist/index.html
+DirectoryIndex index.php dist/index.html
 
 RewriteEngine On
 
@@ -15,5 +15,5 @@ RewriteCond %{REQUEST_FILENAME} -f [OR]
 RewriteCond %{REQUEST_FILENAME} -d
 RewriteRule ^ - [L]
 
-# ---- Everything else → SPA ----
-RewriteRule . dist/index.html [L]
+# ---- Everything else → SPA entrypoint (adds asset cache-busting params) ----
+RewriteRule . index.php [L]

@@ -66,10 +66,16 @@ try {
     'role' => (string)$_SESSION['role'],
   ]);
 
+  $admin_tools_warning = null;
+  if ((string)$_SESSION['role'] === 'admin') {
+    $admin_tools_warning = admin_tools_warning_message();
+  }
+
   json_out([
     'ok' => true,
     'data' => [
       'user' => ['username' => $_SESSION['username'], 'role' => $_SESSION['role']],
+      'admin_tools_warning' => $admin_tools_warning,
     ],
   ]);
 } catch (Throwable $e) {

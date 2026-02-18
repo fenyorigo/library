@@ -30,7 +30,7 @@
           <option>50</option>
           <option>100</option>
         </select>
-        <span class="muted">Total: {{ total }}</span>
+        <span class="muted">{{ resultsSummary }}</span>
 
       </div>
     </div>
@@ -240,7 +240,7 @@
           <option>50</option>
           <option>100</option>
         </select>
-        <span class="muted">Total: {{ total }}</span>
+        <span class="muted">{{ resultsSummary }}</span>
       </div>
     </div>
 
@@ -314,6 +314,18 @@ const gotoPage = ref(null);
 const maxPage = computed(() => {
   const per = perPage.value || 1;
   return Math.max(1, Math.ceil((total.value || 0) / per));
+});
+
+const resultsSummary = computed(() => {
+  const totalCount = Number(total.value || 0);
+  if (totalCount <= 0) return "Results: 0 of 0 (0 images)";
+
+  const per = Math.max(1, Number(perPage.value || 1));
+  const currentPage = Math.max(1, Number(page.value || 1));
+  const start = ((currentPage - 1) * per) + 1;
+  const end = Math.min(currentPage * per, totalCount);
+
+  return `Results: ${start}-${end} of ${totalCount} (${totalCount} images)`;
 });
 
 const formatHu = (book) => {

@@ -63,7 +63,11 @@ export function useAuth(options = {}) {
     loginLoading.value = true;
     loginError.value = "";
     try {
-      await login(u, p);
+      const loginRes = await login(u, p);
+      const adminToolsWarning = loginRes?.data?.admin_tools_warning;
+      if (adminToolsWarning) {
+        alert(adminToolsWarning);
+      }
       loginForm.username = u;
       loginForm.password = "";
       const ok = await fetchCurrentUser();

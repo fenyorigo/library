@@ -355,6 +355,33 @@ function catalog_backup_dir_error(array $status): string {
     }
 }
 
+function admin_tools_warnings(): array {
+    $warnings = [];
+
+    if (!class_exists('ZipArchive')) {
+        $warnings[] = 'ZipArchive is not available in PHP runtime. ZIP backup/export features will fail.';
+    }
+
+    $has_imagick = class_exists('Imagick');
+    $has_gd = extension_loaded('gd');
+    if (!$has_imagick && !$has_gd) {
+        $warnings[] = 'Neither Imagick nor GD is available in PHP runtime. Cover thumbnail generation will fail.';
+    }
+
+    $backup_status = catalog_backup_dir_status();
+    if (($backup_status['enabled'] ?? false) && ($backup_status['status'] ?? '') !== 'ready') {
+        $warnings[] = catalog_backup_dir_error($backup_status);
+    }
+
+    return $warnings;
+}
+
+function admin_tools_warning_message(): ?string {
+    $warnings = admin_tools_warnings();
+    if (!$warnings) return null;
+    return implode("\n", $warnings);
+}
+
 function auth_event_request_meta(): array {
     $cf_ip = trim((string)($_SERVER['HTTP_CF_CONNECTING_IP'] ?? ''));
     $remote_ip = trim((string)($_SERVER['REMOTE_ADDR'] ?? ''));

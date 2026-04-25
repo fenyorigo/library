@@ -27,6 +27,8 @@
             <option value="role_change">role_change</option>
             <option value="user_enabled">user_enabled</option>
             <option value="user_disabled">user_disabled</option>
+            <option value="catalog_purge">catalog_purge</option>
+            <option value="catalog_purge_failed">catalog_purge_failed</option>
           </select>
           <button @click="applyFilters">Filter</button>
           <button class="ghost" @click="clearFilters">Clear</button>

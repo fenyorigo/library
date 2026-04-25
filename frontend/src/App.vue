@@ -62,6 +62,7 @@
         <button v-if="isAdmin" @click="openOrphanMaintenance">Orphan maintenance</button>
         <button v-if="isAdmin" @click="openDuplicateCandidates">Duplicate candidates</button>
         <button v-if="isAdmin" @click="openAuthLogs">Logs</button>
+        <button v-if="isAdmin" class="danger" @click="onPurgeCatalog">Purge catalog</button>
       </div>
     </section>
 
@@ -216,6 +217,7 @@ import {
   fetchBook,
   fetchBooks,
   fetchUserPreferences,
+  purgeCatalog,
   updateBook,
   updateUserPreferences,
   assetUrl,
@@ -743,6 +745,40 @@ const openAuthLogs = () => {
   showAuthLogs.value = true;
 };
 
+const onPurgeCatalog = async () => {
+  if (!ensureAdmin()) return;
+
+  const step1 = confirm(
+    "This will delete ALL catalog records and ALL cover/thumbnail files. This cannot be undone. Continue?"
+  );
+  if (!step1) return;
+
+  const typed = prompt("Type DELETE to confirm catalog purge:", "");
+  if (typed === null) return;
+  if (String(typed).trim() !== "DELETE") {
+    alert("Confirmation text mismatch. Purge cancelled.");
+    return;
+  }
+
+  try {
+    const res = await purgeCatalog("DELETE");
+    const data = res?.data || {};
+    const removedFiles = Number(data.deleted_upload_files || 0);
+    const removedDirs = Number(data.deleted_upload_dirs || 0);
+    alert(
+      `Catalog purge completed.\nRemoved upload files: ${removedFiles}\nRemoved upload dirs: ${removedDirs}`
+    );
+    page.value = 1;
+    await reload();
+  } catch (err) {
+    if (err && err.status === 401) {
+      handleUnauthorized();
+      return;
+    }
+    alert(err && err.message ? err.message : "Catalog purge failed.");
+  }
+};
+
 const openPreferences = () => {
   if (!user.value) return;
   showPreferences.value = true;
@@ -1068,6 +1104,12 @@ button.primary {
   background: var(--btn-primary-bg);
   border-color: var(--btn-primary-border);
   color: var(--btn-primary-text);
+}
+
+button.danger {
+  background: #a8262f;
+  border-color: #7e1c23;
+  color: #ffffff;
 }
 
 button.ghost,

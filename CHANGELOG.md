@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.3] - 2026-04-25
+### Added
+- Admin-only catalog purge from frontend (DB catalog tables + cover/thumb uploads wipe) with audit logging
+
 ## [2.4.2] - 2026-02-15
 ### Changed
 - Version logic centralized

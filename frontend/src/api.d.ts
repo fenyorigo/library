@@ -26,6 +26,7 @@ export function updateOrphanPublisher(publisherId: number, payload?: Record<stri
 export function listUsers(): Promise<any>;
 export function listAuthEvents(params?: Record<string, unknown>): Promise<any>;
 export function purgeAuthEvents(months: number): Promise<any>;
+export function purgeCatalog(confirm?: string): Promise<any>;
 export function createUser(payload?: Record<string, unknown>): Promise<any>;
 export function updateUser(payload?: Record<string, unknown>): Promise<any>;
 export function deleteUser(userId: number | string): Promise<any>;

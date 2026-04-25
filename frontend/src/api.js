@@ -230,6 +230,16 @@ export async function purgeAuthEvents(months) {
   return parseJsonResponse(res);
 }
 
+export async function purgeCatalog(confirm = "DELETE") {
+  const res = await fetch(apiUrl("purge_catalog.php"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify({ confirm }),
+  });
+  return parseJsonResponse(res);
+}
+
 export async function createUser(payload = {}) {
   const res = await fetch(apiUrl('create_user_api.php'), {
     method: 'POST',

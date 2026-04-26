@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.2] - 2026-04-26
+### Added
+- Installer now applies Fedora-specific post-install hardening: app/backup ownership and permissions, plus post-install verification checks
+
+### Changed
+- Installer execution flow now includes concrete install steps after confirmation (extract, post-extract precheck, DB/bootstrap, config/vhost generation)
+- Fedora install flow now updates listen/firewall/SELinux settings from installer inputs
+
+### Fixed
+- Installer now updates existing MySQL/MariaDB app users with the provided password before grants (prevents app-user auth mismatch)
+- Fedora config hardening now aligns config file ownership/mode for Apache readability and secret protection
+
 ## [2.6.1] - 2026-04-26
 ### Added
 - App-local PHP runtime limits via `public/.user.ini` for large import uploads and longer execution/input timeouts

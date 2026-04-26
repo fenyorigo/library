@@ -718,6 +718,8 @@ function create_or_update_app_db_user(array $plan): void {
     foreach ($hosts as $h) {
         $h_q = $pdo->quote($h);
         $pdo->exec("CREATE USER IF NOT EXISTS {$user_q}@{$h_q} IDENTIFIED BY {$pass_q}");
+        // Ensure password is updated even when user already existed.
+        $pdo->exec("ALTER USER {$user_q}@{$h_q} IDENTIFIED BY {$pass_q}");
         $pdo->exec("GRANT SELECT, INSERT, UPDATE, DELETE ON `{$dbname}`.* TO {$user_q}@{$h_q}");
     }
     $pdo->exec('FLUSH PRIVILEGES');
@@ -793,6 +795,24 @@ function write_config_file(array $plan, string $app_root): void {
     @chmod($cfg_path, 0640);
 }
 
+function harden_config_for_platform(array $plan): void {
+    $cfg_path = (string)$plan['config_path'];
+    if (($plan['platform'] ?? '') !== 'fedora') return;
+
+    if (!command_exists('chown') || !command_exists('chmod')) {
+        fail('Missing chown/chmod tools for Fedora config hardening.');
+    }
+
+    $chown = run_cmd('chown root:apache ' . escapeshellarg($cfg_path));
+    if (($chown['code'] ?? 1) !== 0) {
+        fail('Failed to set config ownership (root:apache): ' . ($chown['output'] ?? 'unknown error'));
+    }
+    $chmod = run_cmd('chmod 640 ' . escapeshellarg($cfg_path));
+    if (($chmod['code'] ?? 1) !== 0) {
+        fail('Failed to set config permissions (640): ' . ($chmod['output'] ?? 'unknown error'));
+    }
+}
+
 function write_vhost_snippet(array $plan, string $app_root): string {
     $docroot = rtrim($app_root, '/\\') . '/public';
     $server_name = (string)$plan['vhost']['server_name'];
@@ -823,13 +843,182 @@ function write_vhost_snippet(array $plan, string $app_root): string {
 </VirtualHost>
 CONF;
 
-    $out_dir = rtrim($app_root, '/\\') . '/install-output';
-    ensure_dir_exists($out_dir);
-    $out = $out_dir . '/httpd-bookcatalog-' . $https_port . '.conf';
+    $out = (string)($plan['vhost']['output_path'] ?? '');
+    if ($out === '') {
+        $out_dir = rtrim($app_root, '/\\') . '/install-output';
+        ensure_dir_exists($out_dir);
+        $out = $out_dir . '/httpd-bookcatalog-' . $https_port . '.conf';
+    } else {
+        ensure_dir_exists(dirname($out));
+    }
     if (@file_put_contents($out, $content . "\n") === false) {
         fail("Failed to write vhost snippet: {$out}");
     }
     return $out;
+}
+
+function add_listen_port(string $listen_conf_path, int $port): void {
+    if (!is_file($listen_conf_path) || !is_readable($listen_conf_path)) {
+        fail("Listen config not found/readable: {$listen_conf_path}");
+    }
+    $raw = (string)file_get_contents($listen_conf_path);
+    if (preg_match('/^\s*Listen\s+' . preg_quote((string)$port, '/') . '\s*$/mi', $raw)) {
+        return;
+    }
+    $append = rtrim($raw, "\r\n") . "\nListen {$port}\n";
+    if (@file_put_contents($listen_conf_path, $append) === false) {
+        fail("Failed to update listen config: {$listen_conf_path}");
+    }
+}
+
+function detect_interface_for_cidr(string $cidr): string {
+    if (!command_exists('ip')) return '';
+    $parts = explode('/', $cidr, 2);
+    $ip_probe = trim($parts[0] ?? '');
+    if ($ip_probe === '') return '';
+    $route = run_cmd('ip route get ' . escapeshellarg($ip_probe));
+    if (($route['code'] ?? 1) !== 0) return '';
+    $out = (string)($route['output'] ?? '');
+    if (preg_match('/\bdev\s+([a-zA-Z0-9._:-]+)/', $out, $m)) {
+        return trim((string)$m[1]);
+    }
+    return '';
+}
+
+function semanage_set_context(string $regex_path, string $type): void {
+    $add = run_cmd('semanage fcontext -a -t ' . escapeshellarg($type) . ' ' . escapeshellarg($regex_path));
+    if (($add['code'] ?? 1) === 0) return;
+    $mod = run_cmd('semanage fcontext -m -t ' . escapeshellarg($type) . ' ' . escapeshellarg($regex_path));
+    if (($mod['code'] ?? 1) !== 0) {
+        fail('semanage failed for ' . $regex_path . ': ' . (($mod['output'] ?? '') ?: ($add['output'] ?? 'unknown error')));
+    }
+}
+
+function configure_fedora_security(array $plan, string $app_root): void {
+    if (($plan['platform'] ?? '') !== 'fedora') return;
+
+    $uploads = rtrim($app_root, '/\\') . '/public/uploads';
+    $assets = rtrim($app_root, '/\\') . '/public/user-assets';
+    $backup = (string)$plan['backup_dir'];
+    $cfg_path = (string)$plan['config_path'];
+    $cfg_dir = dirname($cfg_path);
+    $port = (int)$plan['vhost']['https_port'];
+    $cidr = (string)($plan['fedora']['firewall_cidr'] ?? '192.168.0.0/24');
+    $iface = (string)($plan['fedora']['firewall_interface'] ?? '');
+
+    if (command_exists('semanage') && command_exists('restorecon')) {
+        semanage_set_context(rtrim($app_root, '/\\') . '(/.*)?', 'httpd_sys_content_t');
+        semanage_set_context($uploads . '(/.*)?', 'httpd_sys_rw_content_t');
+        semanage_set_context($assets . '(/.*)?', 'httpd_sys_rw_content_t');
+        semanage_set_context(rtrim($backup, '/\\') . '(/.*)?', 'httpd_sys_rw_content_t');
+        semanage_set_context(rtrim($cfg_dir, '/\\') . '(/.*)?', 'httpd_sys_content_t');
+
+        $restore = run_cmd(
+            'restorecon -Rv '
+            . escapeshellarg(rtrim($app_root, '/\\'))
+            . ' ' . escapeshellarg($uploads)
+            . ' ' . escapeshellarg($assets)
+            . ' ' . escapeshellarg(rtrim($backup, '/\\'))
+            . ' ' . escapeshellarg($cfg_dir)
+            . ' ' . escapeshellarg($cfg_path)
+        );
+        if (($restore['code'] ?? 1) !== 0) {
+            fail('restorecon failed: ' . ($restore['output'] ?? 'unknown error'));
+        }
+    } else {
+        fwrite(STDOUT, "WARN: semanage/restorecon not available; SELinux context steps skipped.\n");
+    }
+
+    if (!command_exists('firewall-cmd')) {
+        fwrite(STDOUT, "WARN: firewall-cmd not available; firewall rule steps skipped.\n");
+        return;
+    }
+
+    if ($iface === '') {
+        $iface = detect_interface_for_cidr($cidr);
+    }
+    if ($iface === '') {
+        fail('Could not detect network interface for firewall rule. Provide fedora firewall interface in installer prompt.');
+    }
+
+    $zone_res = run_cmd('firewall-cmd --get-zone-of-interface=' . escapeshellarg($iface));
+    if (($zone_res['code'] ?? 1) !== 0 || trim((string)$zone_res['output']) === '') {
+        fail('Failed to resolve firewalld zone for interface ' . $iface . ': ' . ($zone_res['output'] ?? 'unknown error'));
+    }
+    $zone = trim((string)$zone_res['output']);
+    $rule = 'rule family="ipv4" source address="' . $cidr . '" port port="' . $port . '" protocol="tcp" accept';
+
+    $query = run_cmd(
+        'firewall-cmd --permanent --zone=' . escapeshellarg($zone)
+        . ' --query-rich-rule=' . escapeshellarg($rule)
+    );
+    if (($query['code'] ?? 1) !== 0) {
+        $add = run_cmd(
+            'firewall-cmd --permanent --zone=' . escapeshellarg($zone)
+            . ' --add-rich-rule=' . escapeshellarg($rule)
+        );
+        if (($add['code'] ?? 1) !== 0) {
+            fail('Failed to add firewalld rich-rule: ' . ($add['output'] ?? 'unknown error'));
+        }
+    }
+
+    $reload = run_cmd('firewall-cmd --reload');
+    if (($reload['code'] ?? 1) !== 0) {
+        fail('Failed to reload firewalld: ' . ($reload['output'] ?? 'unknown error'));
+    }
+}
+
+function configure_fedora_permissions(array $plan, string $app_root): void {
+    if (($plan['platform'] ?? '') !== 'fedora') return;
+
+    $backup = (string)$plan['backup_dir'];
+    $cfg_dir = dirname((string)$plan['config_path']);
+    $uploads = rtrim($app_root, '/\\') . '/public/uploads';
+    $assets = rtrim($app_root, '/\\') . '/public/user-assets';
+
+    $ops = [
+        'chown -R apache:apache ' . escapeshellarg(rtrim($app_root, '/\\')),
+        'chmod 755 ' . escapeshellarg(rtrim($app_root, '/\\')),
+        'chown -R apache:apache ' . escapeshellarg(rtrim($backup, '/\\')),
+        'chmod 750 ' . escapeshellarg(rtrim($backup, '/\\')),
+        'chown root:root ' . escapeshellarg(rtrim($cfg_dir, '/\\')),
+        'chmod 755 ' . escapeshellarg(rtrim($cfg_dir, '/\\')),
+        'chown -R apache:apache ' . escapeshellarg($uploads),
+        'chmod 775 ' . escapeshellarg($uploads),
+        'chown -R apache:apache ' . escapeshellarg($assets),
+        'chmod 775 ' . escapeshellarg($assets),
+    ];
+
+    foreach ($ops as $cmd) {
+        $res = run_cmd($cmd);
+        if (($res['code'] ?? 1) !== 0) {
+            fail('Fedora permission step failed: ' . $cmd . ' :: ' . ($res['output'] ?? 'unknown error'));
+        }
+    }
+}
+
+function verify_fedora_postinstall(array $plan, string $app_root): void {
+    if (($plan['platform'] ?? '') !== 'fedora') return;
+
+    $checks = [
+        'app_root_owner' => 'stat -c %U:%G ' . escapeshellarg(rtrim($app_root, '/\\')),
+        'uploads_owner' => 'stat -c %U:%G ' . escapeshellarg(rtrim($app_root, '/\\') . '/public/uploads'),
+        'uploads_mode' => 'stat -c %a ' . escapeshellarg(rtrim($app_root, '/\\') . '/public/uploads'),
+        'app_root_context' => 'ls -Zd ' . escapeshellarg(rtrim($app_root, '/\\')),
+        'uploads_context' => 'ls -Zd ' . escapeshellarg(rtrim($app_root, '/\\') . '/public/uploads'),
+    ];
+
+    foreach ($checks as $name => $cmd) {
+        $res = run_cmd($cmd);
+        if (($res['code'] ?? 1) !== 0) {
+            fail('Fedora verification failed (' . $name . '): ' . ($res['output'] ?? 'unknown error'));
+        }
+    }
+
+    $write_test = run_cmd('runuser -u apache -- test -w ' . escapeshellarg(rtrim($app_root, '/\\') . '/public/uploads'));
+    if (($write_test['code'] ?? 1) !== 0) {
+        fail('Fedora verification failed: apache user cannot write uploads directory.');
+    }
 }
 
 function install_sample_data_if_requested(array $plan): void {
@@ -930,7 +1119,12 @@ function collect_install_plan(array $opts, array $platform_profile): array {
         return null;
     }, (string)$backup_default);
 
-    $config_default = rtrim((string)$platform_profile['config_dir'], '/\\') . '/library-config.php';
+    $target_name = basename(rtrim($target_dir, '/\\'));
+    if (($platform_profile['name'] ?? '') === 'fedora') {
+        $config_default = rtrim((string)$platform_profile['config_dir'], '/\\') . '/' . $target_name . '.conf';
+    } else {
+        $config_default = rtrim((string)$platform_profile['config_dir'], '/\\') . '/library-config.php';
+    }
     $config_path = prompt_until_valid('Config path', static function (string $v): ?string {
         if (!is_absolute_path($v)) return 'must be an absolute path';
         return null;
@@ -951,6 +1145,32 @@ function collect_install_plan(array $opts, array $platform_profile): array {
         if (!is_file($v) || !is_readable($v)) return 'file is missing or not readable';
         return null;
     }, '/opt/homebrew/etc/httpd/certs/bookcatalogv2.key');
+
+    $vhost_output_default = rtrim($target_dir, '/\\') . '/install-output/httpd-bookcatalog-' . $https_port . '.conf';
+    $fedora_cfg = null;
+    if (($platform_profile['name'] ?? '') === 'fedora') {
+        $vhost_output_default = '/etc/httpd/conf.d/' . $target_name . '-vhost.conf';
+        $listen_conf_path = prompt_until_valid('Fedora listen.conf path', static function (string $v): ?string {
+            if (!is_absolute_path($v)) return 'must be absolute path';
+            return null;
+        }, '/etc/httpd/conf.d/listen.conf');
+        $firewall_cidr = prompt_until_valid('Fedora allowed LAN CIDR', static function (string $v): ?string {
+            if (!preg_match('/^\\d+\\.\\d+\\.\\d+\\.\\d+\\/\\d+$/', $v)) return 'must look like 192.168.0.0/24';
+            return null;
+        }, '192.168.0.0/24');
+        $detected_iface = detect_interface_for_cidr($firewall_cidr);
+        $firewall_iface = prompt_until_valid('Fedora network interface', static fn(string $v): ?string => trim($v) === '' ? 'interface is required' : null, $detected_iface !== '' ? $detected_iface : 'enp0s31f6');
+        $fedora_cfg = [
+            'listen_conf_path' => $listen_conf_path,
+            'firewall_cidr' => $firewall_cidr,
+            'firewall_interface' => $firewall_iface,
+        ];
+    }
+
+    $vhost_output_path = prompt_until_valid('Vhost output path', static function (string $v): ?string {
+        if (!is_absolute_path($v)) return 'must be absolute path';
+        return null;
+    }, $vhost_output_default);
 
     $install_sample = prompt_yes_no('Install sample data archive?', false);
     $sample_path = null;
@@ -989,11 +1209,13 @@ function collect_install_plan(array $opts, array $platform_profile): array {
             'https_port' => $https_port,
             'ssl_cert_path' => $ssl_cert_path,
             'ssl_key_path' => $ssl_key_path,
+            'output_path' => $vhost_output_path,
         ],
         'sample_data' => [
             'install' => $install_sample,
             'archive_path' => $sample_path,
         ],
+        'fedora' => $fedora_cfg,
     ];
 }
 
@@ -1071,6 +1293,7 @@ ensure_dir_exists((string)$plan['backup_dir']);
 ensure_dir_exists(dirname((string)$plan['config_path']));
 ensure_dir_exists(rtrim($effective_app_root, '/\\') . '/public/uploads');
 ensure_dir_exists(rtrim($effective_app_root, '/\\') . '/public/user-assets');
+configure_fedora_permissions($plan, $effective_app_root);
 
 fwrite(STDOUT, "Creating database and applying schema...\n");
 create_database_and_schema($plan, $effective_app_root);
@@ -1083,9 +1306,20 @@ create_or_update_catalog_admin($plan);
 
 fwrite(STDOUT, "Writing application config...\n");
 write_config_file($plan, $effective_app_root);
+harden_config_for_platform($plan);
 
 fwrite(STDOUT, "Writing Apache vhost snippet...\n");
 $vhost_path = write_vhost_snippet($plan, $effective_app_root);
+
+if (($plan['platform'] ?? '') === 'fedora') {
+    $listen_conf = (string)($plan['fedora']['listen_conf_path'] ?? '/etc/httpd/conf.d/listen.conf');
+    fwrite(STDOUT, "Updating listen config ({$listen_conf})...\n");
+    add_listen_port($listen_conf, (int)$plan['vhost']['https_port']);
+
+    fwrite(STDOUT, "Applying Fedora SELinux and firewalld settings...\n");
+    configure_fedora_security($plan, $effective_app_root);
+    verify_fedora_postinstall($plan, $effective_app_root);
+}
 
 install_sample_data_if_requested($plan);
 

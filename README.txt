@@ -6,4 +6,4 @@ Config is external via BOOKCATALOG_CONFIG.”
 	•	v2.3.2 – Added admin-only duplicate candidates report to assist with catalog cleanup and collection curation
 	•	v2.3.3 – Duplicate candidate logic updated (subtitle-aware, author sort-name based). Existing duplicate reviews must be reset.
 	•	maintenance: optional SQL scripts available to remove zero-width characters and normalize decomposed accents
-	•	v2.6.1 – Unified filtered export/import flow polish: persistent PHP upload/time limits, logical cover count in selected export filename, and default-cover inclusion/wording updates
+	•	v2.6.2 – Installer flow expanded with fedora-oriented hardening/verification and post-confirmation execution steps (DB bootstrap, config/vhost, platform actions)

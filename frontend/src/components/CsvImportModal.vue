@@ -1,22 +1,41 @@
 <template>
   <div class="overlay" @click.self="$emit('close')">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Import CSV">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Import CSV / Bundle">
       <header class="header">
-        <h3>Import CSV</h3>
+        <h3>Import CSV / Bundle</h3>
         <button class="close" @click="$emit('close')" aria-label="Close">×</button>
       </header>
 
       <section class="body">
+        <div v-if="loading" class="busy-box" aria-live="polite">
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Import in progress… this may take a few minutes for large bundles.</span>
+        </div>
+
         <p class="muted small">
-          Supported formats: <code>books_export.csv</code> (comma-separated export from this app)
-          or legacy <code>title;subtitle;year_published;authors</code> (semicolon-separated).
+          Supported formats: <code>books_export.csv</code> or ZIP bundle from
+          <code>Export selected (CSV + covers)</code>.
         </p>
 
-        <label class="block">CSV File
+        <label class="block">Import File
           <input type="file"
-                 accept=".csv,text/csv,text/plain"
+                 accept=".csv,.zip,text/csv,text/plain,application/zip"
                  @change="onPick"
                  :disabled="loading" />
+        </label>
+
+        <label class="block">Import mode
+          <select v-model="restoreMode" :disabled="loading">
+            <option value="csv_only">CSV only (keep existing covers)</option>
+            <option value="csv_and_covers">CSV + covers (overwrite covers if present)</option>
+          </select>
+        </label>
+
+        <label class="block">Book ID handling
+          <select v-model="idMode" :disabled="loading">
+            <option value="keep_ids">Use IDs from import file (DR/full restore)</option>
+            <option value="new_catalog">New catalog IDs from 1.. (new catalog)</option>
+          </select>
         </label>
 
         <div v-if="result" class="panel">
@@ -124,6 +143,8 @@ export default {
       loading: false,
       result: null as CsvImportResult | null,
       showConflicts: false,
+      restoreMode: "csv_only",
+      idMode: "keep_ids",
     };
   },
   computed: {
@@ -147,14 +168,25 @@ export default {
         const fd = new FormData();
         fd.append('file', this.file);
         fd.append('dry_run', dry ? '1' : '0');
+        fd.append('with_covers', this.restoreMode === 'csv_and_covers' ? '1' : '0');
+        fd.append('id_mode', this.idMode);
 
         const res = await fetch(apiUrl("import_csv.php"), {
           method: 'POST',
           credentials: 'same-origin',
           body: fd,
         });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || data.ok === false) throw new Error(data.error || 'Import failed');
+        const raw = await res.text();
+        let data: any = {};
+        try {
+          data = raw ? JSON.parse(raw) : {};
+        } catch {
+          data = {};
+        }
+        if (!res.ok || data.ok === false) {
+          const fallback = raw && raw.trim() ? raw.trim().slice(0, 500) : '';
+          throw new Error(data.error || fallback || 'Import failed');
+        }
         const payload = (data && data.data ? data.data : null) as CsvImportResult | null;
 
         this.result = payload || null;
@@ -242,4 +274,26 @@ button.ghost { background: transparent; }
 .conflict-row { display: grid; grid-template-columns: 90px 90px 1.5fr 1.5fr 70px; gap: .5rem; padding: .5rem .75rem; border-top: 1px solid var(--line); }
 .conflict-row:first-child { border-top: none; }
 .header-row { font-weight: 600; background: rgba(0,0,0,0.05); }
+.busy-box {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--btn-border);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.35);
+  font-weight: 600;
+}
+.spinner {
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid rgba(0,0,0,0.2);
+  border-top-color: rgba(0,0,0,0.65);
+  border-radius: 999px;
+  display: inline-block;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
 </style>

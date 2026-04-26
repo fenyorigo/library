@@ -193,10 +193,9 @@ function pdo(): PDO {
     if ($env_host !== false && $env_name !== false && $env_user !== false && $env_pass !== false) {
         $host = (string)$env_host;
         $port = (int)(getenv('BOOKS_DB_PORT') ?: '3306');
-        $name = (string)$env_name;
+        $dbname = (string)$env_name;
         $user = (string)$env_user;
         $pass = (string)$env_pass;
-        $charset = (string)(getenv('BOOKS_DB_CHARSET') ?: 'utf8mb4');
     } else {
         $env_path = getenv('BOOKCATALOG_CONFIG') ?: '';
         $home = getenv('HOME') ?: '';
@@ -227,22 +226,23 @@ function pdo(): PDO {
         $db = $cfg['db'];
         $host = $db['host'] ?? null;
         $port = $db['port'] ?? 3306;
-        $name = $db['name'] ?? ($db['dbname'] ?? null);
+        $dbname = $db['dbname'] ?? null;
         $user = $db['user'] ?? null;
         $pass = $db['pass'] ?? null;
-        $charset = $db['charset'] ?? 'utf8mb4';
 
-        if (!$host || !$name || $user === null || $pass === null) {
-            throw new RuntimeException("config.php missing db.host, db.name, db.user, or db.pass");
+        if (!$host || $user === null || $pass === null) {
+            throw new RuntimeException("config.php missing db.host, db.user, or db.pass");
+        }
+        if (empty($db['dbname'])) {
+            throw new RuntimeException('Database name (dbname) is not configured');
         }
     }
 
     $dsn = sprintf(
-        'mysql:host=%s;port=%d;dbname=%s;charset=%s',
+        'mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4',
         $host,
         (int)$port,
-        $name,
-        $charset
+        $dbname
     );
 
     $pdo = new PDO($dsn, $user, $pass, [

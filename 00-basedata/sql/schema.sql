@@ -1,164 +1,201 @@
--- BookCatalog schema (canonical)
-
-CREATE TABLE IF NOT EXISTS Users (
-  user_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  username VARCHAR(64) NOT NULL,
-  password_hash VARCHAR(255) NOT NULL,
-  role ENUM('admin','reader') NOT NULL DEFAULT 'reader',
-  is_active TINYINT(1) NOT NULL DEFAULT '1',
-  force_password_change TINYINT(1) NOT NULL DEFAULT '0',
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  last_login DATETIME DEFAULT NULL,
-  PRIMARY KEY (user_id),
-  UNIQUE KEY uniq_users_username (username)
+/*M!999999\- enable the sandbox mode */ 
+/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */;
+/*!40103 SET TIME_ZONE='+00:00' */;
+/*!40014 SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0 */;
+/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
+/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
+/*M!100616 SET @OLD_NOTE_VERBOSITY=@@NOTE_VERBOSITY, NOTE_VERBOSITY=0 */;
+/* BookCatalog schema baseline*/;
+/*  DB: books */;
+/*  version: 2.3.5 */;
+/*  generated: 2026-04-26 */;
+DROP TABLE IF EXISTS `AuthEvents`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `AuthEvents` (
+  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+  `user_id` int(10) unsigned DEFAULT NULL,
+  `username_snapshot` varchar(190) NOT NULL,
+  `event_type` varchar(32) NOT NULL,
+  `ip_address` varchar(45) NOT NULL,
+  `user_agent` varchar(512) DEFAULT NULL,
+  `details` text DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_authevents_user` (`user_id`),
+  KEY `idx_authevents_type` (`event_type`),
+  KEY `idx_authevents_created` (`created_at`),
+  CONSTRAINT `fk_authevents_user` FOREIGN KEY (`user_id`) REFERENCES `Users` (`user_id`) ON DELETE SET NULL
+) ENGINE=InnoDB AUTO_INCREMENT=190 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `Authors`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `Authors` (
+  `author_id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `name` varchar(255) DEFAULT NULL,
+  `first_name` varchar(255) DEFAULT NULL,
+  `last_name` varchar(255) DEFAULT NULL,
+  `sort_name` varchar(255) DEFAULT NULL,
+  `is_hungarian` tinyint(1) NOT NULL DEFAULT 0,
+  PRIMARY KEY (`author_id`),
+  KEY `idx_authors_sort_name` (`sort_name`),
+  KEY `idx_authors_name` (`name`)
+) ENGINE=InnoDB AUTO_INCREMENT=1653 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `Books`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `Books` (
+  `book_id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `title` varchar(512) NOT NULL,
+  `subtitle` varchar(512) DEFAULT NULL,
+  `series` varchar(255) DEFAULT NULL,
+  `copy_count` int(11) NOT NULL DEFAULT 1,
+  `publisher_id` int(10) unsigned DEFAULT NULL,
+  `year_published` int(11) DEFAULT NULL,
+  `isbn` varchar(64) DEFAULT NULL,
+  `lccn` varchar(64) DEFAULT NULL,
+  `notes` text DEFAULT NULL,
+  `cover_image` varchar(255) DEFAULT NULL,
+  `cover_thumb` varchar(255) DEFAULT NULL,
+  `placement_id` int(10) unsigned DEFAULT NULL,
+  `loaned_to` varchar(255) DEFAULT NULL,
+  `loaned_date` date DEFAULT NULL,
+  PRIMARY KEY (`book_id`),
+  KEY `idx_books_publisher` (`publisher_id`),
+  KEY `idx_books_placement` (`placement_id`),
+  KEY `idx_books_year` (`year_published`),
+  CONSTRAINT `fk_books_placement` FOREIGN KEY (`placement_id`) REFERENCES `Placement` (`placement_id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_books_publisher` FOREIGN KEY (`publisher_id`) REFERENCES `Publishers` (`publisher_id`) ON DELETE SET NULL
+) ENGINE=InnoDB AUTO_INCREMENT=3224 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `Books_Authors`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `Books_Authors` (
+  `book_id` int(10) unsigned NOT NULL,
+  `author_id` int(10) unsigned NOT NULL,
+  `author_ord` int(11) NOT NULL DEFAULT 0,
+  PRIMARY KEY (`book_id`,`author_id`),
+  KEY `idx_books_authors_author` (`author_id`),
+  CONSTRAINT `fk_books_authors_author` FOREIGN KEY (`author_id`) REFERENCES `Authors` (`author_id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_books_authors_book` FOREIGN KEY (`book_id`) REFERENCES `Books` (`book_id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS UserPreferences (
-  user_id INT UNSIGNED NOT NULL,
-  logo_path VARCHAR(255) DEFAULT NULL,
-  bg_color CHAR(7) DEFAULT NULL,
-  fg_color CHAR(7) DEFAULT NULL,
-  text_size VARCHAR(16) NOT NULL DEFAULT 'medium',
-  per_page INT NOT NULL DEFAULT '25',
-  show_cover TINYINT(1) NOT NULL DEFAULT '1',
-  show_subtitle TINYINT(1) NOT NULL DEFAULT '1',
-  show_series TINYINT(1) NOT NULL DEFAULT '1',
-  show_is_hungarian TINYINT(1) NOT NULL DEFAULT '1',
-  show_publisher TINYINT(1) NOT NULL DEFAULT '1',
-  show_year TINYINT(1) NOT NULL DEFAULT '1',
-  show_copy_count TINYINT(1) NOT NULL DEFAULT '0',
-  show_status TINYINT(1) NOT NULL DEFAULT '1',
-  show_placement TINYINT(1) NOT NULL DEFAULT '1',
-  show_isbn TINYINT(1) NOT NULL DEFAULT '0',
-  show_loaned_to TINYINT(1) NOT NULL DEFAULT '0',
-  show_loaned_date TINYINT(1) NOT NULL DEFAULT '0',
-  show_subjects TINYINT(1) NOT NULL DEFAULT '0',
-  show_notes TINYINT(1) NOT NULL DEFAULT '0',
-  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (user_id),
-  CONSTRAINT fk_userprefs_user
-    FOREIGN KEY (user_id) REFERENCES Users(user_id)
-    ON DELETE CASCADE
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `Books_Subjects`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `Books_Subjects` (
+  `book_id` int(10) unsigned NOT NULL,
+  `subject_id` int(10) unsigned NOT NULL,
+  PRIMARY KEY (`book_id`,`subject_id`),
+  KEY `idx_books_subjects_subject` (`subject_id`),
+  CONSTRAINT `fk_books_subjects_book` FOREIGN KEY (`book_id`) REFERENCES `Books` (`book_id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_books_subjects_subject` FOREIGN KEY (`subject_id`) REFERENCES `Subjects` (`subject_id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS Publishers (
-  publisher_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  name VARCHAR(255) NOT NULL,
-  PRIMARY KEY (publisher_id),
-  UNIQUE KEY uniq_publishers_name (name)
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `Placement`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `Placement` (
+  `placement_id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `bookcase_no` int(11) NOT NULL,
+  `shelf_no` int(11) NOT NULL,
+  PRIMARY KEY (`placement_id`),
+  UNIQUE KEY `uniq_placement` (`bookcase_no`,`shelf_no`)
+) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `Publishers`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `Publishers` (
+  `publisher_id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `name` varchar(255) NOT NULL,
+  PRIMARY KEY (`publisher_id`),
+  UNIQUE KEY `uniq_publishers_name` (`name`)
+) ENGINE=InnoDB AUTO_INCREMENT=669 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `Subjects`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `Subjects` (
+  `subject_id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `name` varchar(255) NOT NULL,
+  PRIMARY KEY (`subject_id`),
+  UNIQUE KEY `uniq_subjects_name` (`name`)
+) ENGINE=InnoDB AUTO_INCREMENT=221 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `SystemInfo`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `SystemInfo` (
+  `key_name` varchar(64) NOT NULL,
+  `value` text NOT NULL,
+  PRIMARY KEY (`key_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS Subjects (
-  subject_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  name VARCHAR(255) NOT NULL,
-  PRIMARY KEY (subject_id),
-  UNIQUE KEY uniq_subjects_name (name)
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `UserPreferences`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `UserPreferences` (
+  `user_id` int(10) unsigned NOT NULL,
+  `logo_path` varchar(255) DEFAULT NULL,
+  `bg_color` char(7) DEFAULT NULL,
+  `fg_color` char(7) DEFAULT NULL,
+  `text_size` varchar(16) NOT NULL DEFAULT 'medium',
+  `per_page` int(11) NOT NULL DEFAULT 25,
+  `show_cover` tinyint(1) NOT NULL DEFAULT 1,
+  `show_subtitle` tinyint(1) NOT NULL DEFAULT 1,
+  `show_series` tinyint(1) NOT NULL DEFAULT 1,
+  `show_is_hungarian` tinyint(1) NOT NULL DEFAULT 1,
+  `show_publisher` tinyint(1) NOT NULL DEFAULT 1,
+  `show_year` tinyint(1) NOT NULL DEFAULT 1,
+  `show_copy_count` tinyint(1) NOT NULL DEFAULT 0,
+  `show_status` tinyint(1) NOT NULL DEFAULT 1,
+  `show_placement` tinyint(1) NOT NULL DEFAULT 1,
+  `show_isbn` tinyint(1) NOT NULL DEFAULT 0,
+  `show_loaned_to` tinyint(1) NOT NULL DEFAULT 0,
+  `show_loaned_date` tinyint(1) NOT NULL DEFAULT 0,
+  `show_subjects` tinyint(1) NOT NULL DEFAULT 0,
+  `show_notes` tinyint(1) NOT NULL DEFAULT 0,
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`user_id`),
+  CONSTRAINT `fk_userprefs_user` FOREIGN KEY (`user_id`) REFERENCES `Users` (`user_id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS Authors (
-  author_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  name VARCHAR(255) DEFAULT NULL,
-  first_name VARCHAR(255) DEFAULT NULL,
-  last_name VARCHAR(255) DEFAULT NULL,
-  sort_name VARCHAR(255) DEFAULT NULL,
-  is_hungarian TINYINT(1) NOT NULL DEFAULT '0',
-  PRIMARY KEY (author_id),
-  KEY idx_authors_sort_name (sort_name),
-  KEY idx_authors_name (name)
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `Users`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `Users` (
+  `user_id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `username` varchar(64) NOT NULL,
+  `password_hash` varchar(255) NOT NULL,
+  `role` enum('admin','reader') NOT NULL DEFAULT 'reader',
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `force_password_change` tinyint(1) NOT NULL DEFAULT 0,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `last_login` datetime DEFAULT NULL,
+  PRIMARY KEY (`user_id`),
+  UNIQUE KEY `uniq_users_username` (`username`)
+) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `duplicate_review`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `duplicate_review` (
+  `dup_key` varchar(768) NOT NULL,
+  `status` enum('NEW','IGNORE','CONFIRMED','MERGED') NOT NULL DEFAULT 'NEW',
+  `note` text DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`dup_key`),
+  KEY `status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
-CREATE TABLE IF NOT EXISTS Placement (
-  placement_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  bookcase_no INT NOT NULL,
-  shelf_no INT NOT NULL,
-  PRIMARY KEY (placement_id),
-  UNIQUE KEY uniq_placement (bookcase_no, shelf_no)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
+/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;
+/*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;
+/*M!100616 SET NOTE_VERBOSITY=@OLD_NOTE_VERBOSITY */;
 
-CREATE TABLE IF NOT EXISTS Books (
-  book_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  title VARCHAR(512) NOT NULL,
-  subtitle VARCHAR(512) DEFAULT NULL,
-  series VARCHAR(255) DEFAULT NULL,
-  copy_count INT NOT NULL DEFAULT 1,
-  publisher_id INT UNSIGNED DEFAULT NULL,
-  year_published INT DEFAULT NULL,
-  isbn VARCHAR(64) DEFAULT NULL,
-  lccn VARCHAR(64) DEFAULT NULL,
-  notes TEXT DEFAULT NULL,
-  cover_image VARCHAR(255) DEFAULT NULL,
-  cover_thumb VARCHAR(255) DEFAULT NULL,
-  placement_id INT UNSIGNED DEFAULT NULL,
-  loaned_to VARCHAR(255) DEFAULT NULL,
-  loaned_date DATE DEFAULT NULL,
-  PRIMARY KEY (book_id),
-  KEY idx_books_publisher (publisher_id),
-  KEY idx_books_placement (placement_id),
-  KEY idx_books_year (year_published),
-  CONSTRAINT fk_books_placement
-    FOREIGN KEY (placement_id) REFERENCES Placement(placement_id)
-    ON DELETE SET NULL,
-  CONSTRAINT fk_books_publisher
-    FOREIGN KEY (publisher_id) REFERENCES Publishers(publisher_id)
-    ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS Books_Authors (
-  book_id INT UNSIGNED NOT NULL,
-  author_id INT UNSIGNED NOT NULL,
-  author_ord INT NOT NULL DEFAULT '0',
-  PRIMARY KEY (book_id, author_id),
-  KEY idx_books_authors_author (author_id),
-  CONSTRAINT fk_books_authors_author
-    FOREIGN KEY (author_id) REFERENCES Authors(author_id)
-    ON DELETE CASCADE,
-  CONSTRAINT fk_books_authors_book
-    FOREIGN KEY (book_id) REFERENCES Books(book_id)
-    ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS Books_Subjects (
-  book_id INT UNSIGNED NOT NULL,
-  subject_id INT UNSIGNED NOT NULL,
-  PRIMARY KEY (book_id, subject_id),
-  KEY idx_books_subjects_subject (subject_id),
-  CONSTRAINT fk_books_subjects_book
-    FOREIGN KEY (book_id) REFERENCES Books(book_id)
-    ON DELETE CASCADE,
-  CONSTRAINT fk_books_subjects_subject
-    FOREIGN KEY (subject_id) REFERENCES Subjects(subject_id)
-    ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS AuthEvents (
-  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  user_id INT UNSIGNED DEFAULT NULL,
-  username_snapshot VARCHAR(190) NOT NULL,
-  event_type VARCHAR(32) NOT NULL,
-  ip_address VARCHAR(45) NOT NULL,
-  user_agent VARCHAR(512) DEFAULT NULL,
-  details TEXT DEFAULT NULL,
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (id),
-  KEY idx_authevents_user (user_id),
-  KEY idx_authevents_type (event_type),
-  KEY idx_authevents_created (created_at),
-  CONSTRAINT fk_authevents_user
-    FOREIGN KEY (user_id) REFERENCES Users(user_id)
-    ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS SystemInfo (
-  key_name VARCHAR(64) NOT NULL,
-  value TEXT NOT NULL,
-  PRIMARY KEY (key_name)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS duplicate_review (
-  dup_key VARCHAR(768) NOT NULL,
-  status ENUM('NEW','IGNORE','CONFIRMED','MERGED') NOT NULL DEFAULT 'NEW',
-  note TEXT,
-  updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (dup_key),
-  KEY status (status)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

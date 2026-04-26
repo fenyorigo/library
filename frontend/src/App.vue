@@ -43,14 +43,8 @@
           v-if="isAdmin"
           class="link-btn"
           type="button"
-          @click="onExportCsv"
-        >Export CSV</button>
-        <button
-          v-if="isAdmin"
-          class="link-btn"
-          type="button"
-          @click="onExportCovers"
-        >Covers ZIP</button>
+          @click="onExportSelectedBundle"
+        >Export selected (CSV + covers)</button>
         <button
           v-if="isAdmin"
           class="link-btn"
@@ -653,18 +647,22 @@ const resetSort = () => {
   reload();
 };
 
-const onExportCsv = async () => {
-  if (!ensureAdmin()) return;
-  const params = {};
-  if (q.value) params.q = q.value;
-  const url = buildBackupUrl("export_books_csv.php", params);
-  await runBackupFlow(url, "CSV");
+const buildExportTimestamp = () => {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 };
 
-const onExportCovers = async () => {
+const onExportSelectedBundle = async () => {
   if (!ensureAdmin()) return;
-  const url = buildBackupUrl("export_covers_zip.php");
-  await runBackupFlow(url, "covers ZIP");
+  const params = {
+    ts: buildExportTimestamp(),
+    sort: sort.value || "title",
+    dir: dir.value || "asc",
+  };
+  if (q.value) params.q = q.value;
+  const url = buildBackupUrl("export_selected_bundle.php", params);
+  await runBackupFlow(url, "selected CSV + covers");
 };
 
 const onExportFullBackup = async () => {

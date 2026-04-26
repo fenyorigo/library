@@ -6,3 +6,4 @@ Config is external via BOOKCATALOG_CONFIG.”
 	•	v2.3.2 – Added admin-only duplicate candidates report to assist with catalog cleanup and collection curation
 	•	v2.3.3 – Duplicate candidate logic updated (subtitle-aware, author sort-name based). Existing duplicate reviews must be reset.
 	•	maintenance: optional SQL scripts available to remove zero-width characters and normalize decomposed accents
+	•	v2.6.0 – Unified filtered export bundle (CSV + covers), ZIP import restore modes (CSV-only or CSV+covers), ID remap/new-catalog import options, and thumbnail consistency fixes

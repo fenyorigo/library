@@ -150,7 +150,7 @@ SELECT
   b.isbn, b.lccn,
   b.notes,
   b.cover_image,
-  b.cover_image AS cover_thumb,
+  b.cover_thumb,
   (b.cover_image IS NOT NULL AND b.cover_image <> '') AS has_cover,
   b.loaned_to,
   b.loaned_date,

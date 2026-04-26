@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.0] - 2026-04-26
+### Added
+- Unified admin export: `Export selected (CSV + covers)` creates one ZIP bundle with shared timestamp and current filter support
+- ZIP bundle import support (CSV + covers) with DR/full restore options
+- Import modal progress indicator for long-running restore operations
+
+### Changed
+- Import options now support `CSV only` vs `CSV + covers` and `keep IDs` vs `new catalog IDs`
+- Cover restore during import now remaps files to target IDs and regenerates thumbnails for consistency
+- List API now returns real `cover_thumb` values (thumbnail rebuild results are visible immediately)
+- CSV export filename now includes schema version suffix
+- DB config key is standardized to `db.dbname` (no `db.name` fallback)
+
+### Fixed
+- Duplicate merge cleanup stability and reference-safe cover cleanup behavior
+- Import error reporting now returns clearer details for oversized uploads and non-JSON backend failures
+
 ## [2.5.0] - 2026-04-25
 ### Added
 - Duplicate merge-as-copies workflow with admin-only `MERGE` confirmation and atomic backend transaction

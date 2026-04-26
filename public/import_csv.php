@@ -8,27 +8,196 @@ require_admin();
 // Never leak warnings/notices into JSON
 error_reporting(E_ALL & ~E_DEPRECATED);
 ini_set('display_errors', '0');
+ini_set('memory_limit', '512M');
+set_time_limit(600);
+ignore_user_abort(true);
+
+function import_size_to_bytes(string $value): int {
+    $v = trim($value);
+    if ($v === '') return 0;
+    $unit = strtolower(substr($v, -1));
+    $num = (float)$v;
+    switch ($unit) {
+        case 'g': return (int)($num * 1024 * 1024 * 1024);
+        case 'm': return (int)($num * 1024 * 1024);
+        case 'k': return (int)($num * 1024);
+        default: return (int)$num;
+    }
+}
+
+function import_rrmdir(string $dir): void {
+    if (!is_dir($dir)) return;
+    $items = scandir($dir);
+    if ($items === false) return;
+    foreach ($items as $item) {
+        if ($item === '.' || $item === '..') continue;
+        $path = $dir . DIRECTORY_SEPARATOR . $item;
+        if (is_dir($path)) {
+            import_rrmdir($path);
+        } else {
+            @unlink($path);
+        }
+    }
+    @rmdir($dir);
+}
+
+function import_parse_bool(array $source, string $key, bool $default = false): bool {
+    if (!array_key_exists($key, $source)) return $default;
+    $v = $source[$key];
+    if (is_bool($v)) return $v;
+    $s = strtolower(trim((string)$v));
+    return !($s === '' || $s === '0' || $s === 'false' || $s === 'no' || $s === 'off');
+}
+
+function import_resolve_upload(array $file): array {
+    $name = (string)($file['name'] ?? '');
+    $tmp_path = (string)($file['tmp_name'] ?? '');
+    $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+
+    if ($ext === 'zip') {
+        if (!class_exists('ZipArchive')) {
+            throw new RuntimeException('Zip import requires ZipArchive extension');
+        }
+
+        $tmp_root = rtrim(sys_get_temp_dir(), '/\\') . '/bookcatalog_import_' . bin2hex(random_bytes(6));
+        if (!@mkdir($tmp_root, 0775, true) && !is_dir($tmp_root)) {
+            throw new RuntimeException('Unable to prepare temporary directory for ZIP import');
+        }
+
+        $zip = new ZipArchive();
+        if ($zip->open($tmp_path) !== true) {
+            import_rrmdir($tmp_root);
+            throw new RuntimeException('Unable to open ZIP file');
+        }
+
+        if (!$zip->extractTo($tmp_root)) {
+            $zip->close();
+            import_rrmdir($tmp_root);
+            throw new RuntimeException('Unable to extract ZIP file');
+        }
+        $zip->close();
+
+        $candidates = [
+            $tmp_root . '/data/books.csv',
+            $tmp_root . '/books.csv',
+        ];
+        $csv_path = null;
+        foreach ($candidates as $cand) {
+            if (is_file($cand) && is_readable($cand)) {
+                $csv_path = $cand;
+                break;
+            }
+        }
+
+        if ($csv_path === null) {
+            $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($tmp_root, FilesystemIterator::SKIP_DOTS));
+            foreach ($it as $fi) {
+                if (!$fi->isFile()) continue;
+                if (strtolower($fi->getExtension()) === 'csv') {
+                    $csv_path = $fi->getPathname();
+                    break;
+                }
+            }
+        }
+
+        if ($csv_path === null) {
+            import_rrmdir($tmp_root);
+            throw new RuntimeException('ZIP does not contain a readable CSV (expected data/books.csv)');
+        }
+
+        return [
+            'kind' => 'zip',
+            'csv_path' => $csv_path,
+            'extract_root' => $tmp_root,
+        ];
+    }
+
+    return [
+        'kind' => 'csv',
+        'csv_path' => $tmp_path,
+        'extract_root' => null,
+    ];
+}
+
+function import_find_cover_source(string $extract_root, int $old_id, ?string $preferred_rel): ?string {
+    $roots = [];
+
+    $book_dir = $extract_root . '/uploads/' . $old_id;
+    $fallbacks = [
+        $book_dir . '/cover.jpg',
+        $book_dir . '/cover.jpeg',
+        $book_dir . '/cover.png',
+        $book_dir . '/cover.webp',
+        $book_dir . '/cover.gif',
+    ];
+    foreach ($fallbacks as $f) $roots[] = $f;
+
+    if ($preferred_rel !== null && $preferred_rel !== '') {
+        $preferred_rel = ltrim(str_replace('\\', '/', $preferred_rel), '/');
+        if (strpos($preferred_rel, 'uploads/') === 0) {
+            $roots[] = $extract_root . '/' . $preferred_rel;
+        }
+    }
+
+    foreach ($roots as $path) {
+        if (is_file($path) && is_readable($path)) return $path;
+    }
+    return null;
+}
+
+function import_find_thumb_source(string $extract_root, int $old_id, ?string $preferred_rel): ?string {
+    $roots = [];
+
+    $book_dir = $extract_root . '/uploads/' . $old_id;
+    $fallbacks = [
+        $book_dir . '/cover-thumb.jpg',
+        $book_dir . '/cover-thumb.jpeg',
+        $book_dir . '/cover-thumb.png',
+        $book_dir . '/cover-thumb.webp',
+        $book_dir . '/cover-thumb.gif',
+    ];
+    foreach ($fallbacks as $f) $roots[] = $f;
+
+    if ($preferred_rel !== null && $preferred_rel !== '') {
+        $preferred_rel = ltrim(str_replace('\\', '/', $preferred_rel), '/');
+        if (strpos($preferred_rel, 'uploads/') === 0) {
+            $roots[] = $extract_root . '/' . $preferred_rel;
+        }
+    }
+
+    foreach ($roots as $path) {
+        if (is_file($path) && is_readable($path)) return $path;
+    }
+    return null;
+}
 
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
 if ($method === 'GET') {
-    // Minimal upload form for convenience
     header('Content-Type: text/html; charset=utf-8');
     ?>
     <!doctype html>
     <meta charset="utf-8">
-    <title>Import CSV</title>
+    <title>Import CSV / Bundle</title>
     <style>
         body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 2rem; }
-        form { display: grid; gap: .75rem; max-width: 520px; }
+        form { display: grid; gap: .75rem; max-width: 680px; }
         label { font-weight: 600; }
     </style>
-    <h1>Import CSV</h1>
+    <h1>Import CSV / Bundle</h1>
     <p>Supported formats:<br>
-        <code>books_export.csv</code> (comma-separated export from this app), or<br>
-        legacy <code>title;subtitle;year_published;authors</code> (semicolon separated).</p>
+        <code>books_export.csv</code>, or ZIP bundle from <code>Export selected (CSV + covers)</code>.</p>
     <form method="post" enctype="multipart/form-data">
-        <label>CSV file <input type="file" name="file" accept=".csv,text/csv,text/plain" required></label>
+        <label>Import file
+            <input type="file" name="file" accept=".csv,.zip,text/csv,text/plain,application/zip" required>
+        </label>
+        <label><input type="checkbox" name="with_covers" value="1"> Import covers too (ZIP only, overwrite target cover files)</label>
+        <label>ID handling
+            <select name="id_mode">
+                <option value="keep_ids">Use IDs from import file</option>
+                <option value="new_catalog">New catalog IDs (ignore imported IDs)</option>
+            </select>
+        </label>
         <label><input type="checkbox" name="dry_run" value="1" checked> Dry run (validate only; don’t insert)</label>
         <button type="submit">Upload &amp; Import</button>
     </form>
@@ -40,22 +209,44 @@ header('Content-Type: application/json; charset=utf-8');
 
 try {
     if ($method !== 'POST') {
-        http_response_code(405);
         json_fail('Method Not Allowed', 405);
     }
 
-    if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
-        http_response_code(400);
+    $content_length = (int)($_SERVER['CONTENT_LENGTH'] ?? 0);
+    $post_max_raw = (string)ini_get('post_max_size');
+    $upload_max_raw = (string)ini_get('upload_max_filesize');
+    $post_max_bytes = import_size_to_bytes($post_max_raw);
+    if ($post_max_bytes > 0 && $content_length > $post_max_bytes) {
+        json_fail(
+            'Uploaded request is larger than PHP post_max_size. '
+            . 'CONTENT_LENGTH=' . $content_length . ' bytes, '
+            . 'post_max_size=' . $post_max_raw . ', '
+            . 'upload_max_filesize=' . $upload_max_raw
+            . '. Increase PHP limits before retry.',
+            413
+        );
+    }
+
+    if (!isset($_FILES['file']) || (int)$_FILES['file']['error'] !== UPLOAD_ERR_OK) {
         json_fail('No file uploaded or upload error', 400);
     }
 
-    $dry_run = isset($_POST['dry_run']) && (string)$_POST['dry_run'] !== '' && $_POST['dry_run'] !== '0';
+    $dry_run = import_parse_bool($_POST, 'dry_run', false);
+    $with_covers = import_parse_bool($_POST, 'with_covers', false);
+    $id_mode = trim((string)($_POST['id_mode'] ?? 'keep_ids'));
+    if (!in_array($id_mode, ['keep_ids', 'new_catalog'], true)) {
+        json_fail('Invalid id_mode', 400);
+    }
 
-    $tmp_path = $_FILES['file']['tmp_name'];
-    $fh = @fopen($tmp_path, 'rb');
+    $upload = import_resolve_upload($_FILES['file']);
+    $source_kind = (string)$upload['kind'];
+    $csv_path = (string)$upload['csv_path'];
+    $extract_root = $upload['extract_root'];
+
+    $fh = @fopen($csv_path, 'rb');
     if (!$fh) {
-        http_response_code(400);
-        json_fail('Unable to open uploaded file', 400);
+        if (is_string($extract_root)) import_rrmdir($extract_root);
+        json_fail('Unable to open import CSV', 400);
     }
 
     $pdo = pdo();
@@ -66,8 +257,10 @@ try {
     $skipped = 0;
     $errors = [];
     $id_conflicts = [];
+    $id_map = [];
+    $covers_copied = 0;
+    $covers_missing = 0;
 
-    // Helpers
     $normalize_year = static function ($s) {
         $s = trim((string)$s);
         if ($s === '') return null;
@@ -76,7 +269,6 @@ try {
     };
 
     $strip_bom = static function (string $s): string {
-        // Remove UTF-8 BOM if present
         if (strncmp($s, "\xEF\xBB\xBF", 3) === 0) return substr($s, 3);
         return $s;
     };
@@ -91,6 +283,7 @@ try {
     $first_line = fgets($fh);
     if ($first_line === false) {
         fclose($fh);
+        if (is_string($extract_root)) import_rrmdir($extract_root);
         json_fail('Empty file', 400);
     }
     $first_line = utf8_clean($strip_bom($first_line));
@@ -102,7 +295,7 @@ try {
 
     $export_keys = [
         'id','title','subtitle','series','copy_count','year','isbn','lccn','notes','publisher','authors','subjects',
-        'loaned_to','loaned_date','bookcase','shelf','cover_image','cover_filename'
+        'loaned_to','loaned_date','bookcase','shelf','cover_image','cover_thumb','cover_filename'
     ];
     $legacy_keys = ['title','subtitle','year_published','authors'];
 
@@ -138,7 +331,6 @@ try {
     }
 
     if ($header_norm === null) {
-        // No header; rewind and assume legacy format.
         fseek($fh, 0);
         $mode = 'legacy';
     }
@@ -158,6 +350,8 @@ try {
         return $dt && $dt->format('Y-m-d') === $val;
     };
 
+    $cover_jobs = [];
+
     while (($row = fgetcsv($fh, 0, $delimiter, '"', '\\')) !== false) {
         $total++;
 
@@ -168,7 +362,6 @@ try {
         }, $row);
 
         if ($header_map === null) {
-            // Legacy (no header): title;subtitle;year_published;authors
             for ($i = 0; $i < 4; $i++) {
                 if (!array_key_exists($i, $row)) $row[$i] = '';
             }
@@ -193,6 +386,8 @@ try {
         }
 
         $id_in = null;
+        $cover_image_rel = null;
+        $cover_thumb_rel = null;
         if ($mode === 'legacy') {
             $subtitle = N($data['subtitle'] ?? null);
             $year = $normalize_year($data['year_published'] ?? null);
@@ -206,11 +401,12 @@ try {
             $loaned_to = null;
             $loaned_date = null;
             $subjects_csv = null;
-            $cover_filename = null;
             $copy_count = 1;
+            $source_old_id = null;
         } else {
             $id_in = (int)($data['id'] ?? 0);
             if ($id_in <= 0) $id_in = null;
+            $source_old_id = $id_in;
             $subtitle = N($data['subtitle'] ?? null);
             $series = N($data['series'] ?? null);
             $year = $normalize_year($data['year'] ?? ($data['year_published'] ?? null));
@@ -247,11 +443,12 @@ try {
                 }
             }
 
-            $cover_filename = N($data['cover_filename'] ?? null);
-            if ($cover_filename === null) {
-                $cover_image = N($data['cover_image'] ?? null);
-                if ($cover_image) {
-                    $cover_filename = basename($cover_image);
+            $cover_image_rel = N($data['cover_image'] ?? null);
+            $cover_thumb_rel = N($data['cover_thumb'] ?? null);
+            if ($cover_thumb_rel === null) {
+                $cover_filename = N($data['cover_filename'] ?? null);
+                if ($cover_filename !== null && $id_in !== null) {
+                    $cover_thumb_rel = 'uploads/' . $id_in . '/' . basename($cover_filename);
                 }
             }
         }
@@ -261,21 +458,31 @@ try {
         }
 
         try {
-            $id_conflict = false;
-            if ($id_in !== null) {
+            $book_id = null;
+
+            if ($id_mode === 'keep_ids' && $id_in !== null) {
                 $exists = $pdo->prepare('SELECT 1 FROM Books WHERE book_id = ? LIMIT 1');
                 $exists->execute([$id_in]);
-                $id_conflict = (bool)$exists->fetchColumn();
-            }
+                if ((bool)$exists->fetchColumn()) {
+                    $skipped++;
+                    if (count($errors) < 25) $errors[] = ['line' => $total, 'error' => 'book_id already exists'];
+                    $id_conflicts[] = [
+                        'line' => $total,
+                        'existing_id' => $id_in,
+                        'new_id' => null,
+                        'title' => $title,
+                        'authors' => $authors_csv,
+                    ];
+                    continue;
+                }
 
-            if ($id_in !== null && !$id_conflict) {
-                $stmt = $pdo->prepare("
-        INSERT INTO Books
-          (book_id, title, subtitle, series, copy_count, publisher_id, year_published,
-           isbn, lccn, notes, cover_image, cover_thumb, placement_id,
-           loaned_to, loaned_date)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-      ");
+                $stmt = $pdo->prepare(
+                    "INSERT INTO Books
+                      (book_id, title, subtitle, series, copy_count, publisher_id, year_published,
+                       isbn, lccn, notes, cover_image, cover_thumb, placement_id,
+                       loaned_to, loaned_date)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                );
                 $stmt->execute([
                     $id_in,
                     $title,
@@ -295,13 +502,13 @@ try {
                 ]);
                 $book_id = $id_in;
             } else {
-                $stmt = $pdo->prepare("
-        INSERT INTO Books
-          (title, subtitle, series, copy_count, publisher_id, year_published,
-           isbn, lccn, notes, cover_image, cover_thumb, placement_id,
-           loaned_to, loaned_date)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-      ");
+                $stmt = $pdo->prepare(
+                    "INSERT INTO Books
+                      (title, subtitle, series, copy_count, publisher_id, year_published,
+                       isbn, lccn, notes, cover_image, cover_thumb, placement_id,
+                       loaned_to, loaned_date)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                );
                 $stmt->execute([
                     $title,
                     $subtitle,
@@ -342,22 +549,23 @@ try {
                 }
             }
 
-            if ($cover_filename) {
-                $rel = 'uploads/' . $book_id . '/' . $cover_filename;
-                $upd = $pdo->prepare("UPDATE Books SET cover_image = ?, cover_thumb = ? WHERE book_id = ?");
-                $upd->execute([$rel, $rel, $book_id]);
+            if ($id_in !== null && $book_id !== $id_in) {
+                $id_map[] = [
+                    'line' => $total,
+                    'existing_id' => $id_in,
+                    'new_id' => $book_id,
+                    'title' => $title,
+                    'authors' => $authors_csv,
+                ];
             }
 
-            if ($id_conflict && $id_in !== null) {
-                if (count($id_conflicts) < 200) {
-                    $id_conflicts[] = [
-                        'line' => $total,
-                        'existing_id' => $id_in,
-                        'new_id' => $book_id,
-                        'title' => $title,
-                        'authors' => $authors_csv,
-                    ];
-                }
+            if ($with_covers && is_string($extract_root) && $source_old_id !== null) {
+                $cover_jobs[] = [
+                    'old_id' => (int)$source_old_id,
+                    'new_id' => $book_id,
+                    'cover_image' => $cover_image_rel,
+                    'cover_thumb' => $cover_thumb_rel,
+                ];
             }
 
             $inserted++;
@@ -370,20 +578,92 @@ try {
 
     fclose($fh);
 
+    if (!$dry_run && $with_covers && is_string($extract_root)) {
+        $uploads_root = realpath(__DIR__ . '/uploads') ?: (__DIR__ . '/uploads');
+        foreach ($cover_jobs as $job) {
+            $old_id = (int)$job['old_id'];
+            $new_id = (int)$job['new_id'];
+            $cover_src = import_find_cover_source($extract_root, $old_id, $job['cover_image']);
+            $thumb_src = import_find_thumb_source($extract_root, $old_id, $job['cover_thumb']);
+
+            if ($cover_src === null && $thumb_src === null) {
+                $covers_missing++;
+                continue;
+            }
+
+            $target_dir = $uploads_root . DIRECTORY_SEPARATOR . $new_id;
+            if (!is_dir($target_dir) && !@mkdir($target_dir, 0775, true) && !is_dir($target_dir)) {
+                $covers_missing++;
+                continue;
+            }
+
+            // Always normalize target cover paths and regenerate thumbnail from the copied cover.
+            // This avoids stale/mismatched thumb files after ID remapping restores.
+            foreach (glob($target_dir . DIRECTORY_SEPARATOR . 'cover*.*') ?: [] as $oldf) { @unlink($oldf); }
+            foreach (glob($target_dir . DIRECTORY_SEPARATOR . 'cover-thumb*.*') ?: [] as $oldf) { @unlink($oldf); }
+
+            $source_image = $cover_src ?? $thumb_src;
+            if ($source_image === null) {
+                $covers_missing++;
+                continue;
+            }
+
+            $ext = strtolower(pathinfo($source_image, PATHINFO_EXTENSION));
+            if (!in_array($ext, ['jpg', 'jpeg', 'png', 'webp', 'gif'], true)) {
+                $ext = 'jpg';
+            }
+
+            $cover_dst_abs = $target_dir . DIRECTORY_SEPARATOR . 'cover.' . $ext;
+            $thumb_dst_abs = $target_dir . DIRECTORY_SEPARATOR . 'cover-thumb.' . $ext;
+            if (!@copy($source_image, $cover_dst_abs)) {
+                $covers_missing++;
+                continue;
+            }
+
+            $thumb_ok = make_thumb($cover_dst_abs, $thumb_dst_abs, 200);
+            $rel_cover = 'uploads/' . $new_id . '/cover.' . $ext;
+            $rel_thumb = $thumb_ok ? ('uploads/' . $new_id . '/cover-thumb.' . $ext) : $rel_cover;
+
+            $upd = $pdo->prepare('UPDATE Books SET cover_image = ?, cover_thumb = ? WHERE book_id = ?');
+            $upd->execute([$rel_cover, $rel_thumb, $new_id]);
+            $covers_copied++;
+            if ($thumb_ok) $covers_copied++;
+        }
+    }
+
+    if (is_string($extract_root)) {
+        import_rrmdir($extract_root);
+    }
+
+    $note = 'CSV import completed.';
+    if ($source_kind === 'zip') {
+        $note = 'ZIP bundle import completed.';
+    }
+    if ($with_covers && $source_kind !== 'zip') {
+        $note .= ' Covers were requested but source is not ZIP; no cover files imported.';
+    }
+
     json_out([
         'ok' => true,
         'data' => [
             'dry_run' => $dry_run,
+            'source_kind' => $source_kind,
+            'with_covers' => $with_covers,
+            'id_mode' => $id_mode,
             'total' => $total,
             'inserted' => $dry_run ? 0 : $inserted,
             'skipped' => $skipped,
-            'errors' => $errors,       // at most 25 samples
+            'errors' => $errors,
             'id_conflicts' => $id_conflicts,
-            'note' => 'CSV formats: export_books_csv.php output (comma-delimited) or legacy title;subtitle;year_published;authors (semicolon-delimited). If an ID already exists, a new ID is assigned and reported in id_conflicts.',
+            'id_remaps' => $id_map,
+            'covers_copied' => $dry_run ? 0 : $covers_copied,
+            'covers_missing' => $dry_run ? 0 : $covers_missing,
+            'note' => $note,
         ],
     ]);
-
 } catch (Throwable $e) {
-    http_response_code(500);
+    if (isset($extract_root) && is_string($extract_root)) {
+        import_rrmdir($extract_root);
+    }
     json_fail($e->getMessage(), 500);
 }

@@ -6,7 +6,7 @@ return [
     'db' => [
         'host' => 'DB_HOST',
         'port' => 'DB_PORT',
-        'name' => 'DB_NAME',
+        'dbname' => 'DB_NAME',
         'user' => 'DB_USER',
         'pass' => 'DB_PASS',
     ],

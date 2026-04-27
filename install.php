@@ -1389,6 +1389,9 @@ function collect_install_plan(array $opts, array $platform_profile): array {
     if (($platform_profile['name'] ?? '') === 'fedora') {
         // Fedora naming convention: <port>-<app>.conf (app = target dir basename)
         $vhost_output_default = '/etc/httpd/conf.d/' . $https_port . '-' . $target_name . '.conf';
+        if (is_string($opts['vhost_output_path'] ?? null) && trim((string)$opts['vhost_output_path']) !== '') {
+            fwrite(STDOUT, "Note: --vhost-output-path is ignored on fedora; using {$vhost_output_default}\n");
+        }
         $listen_conf_path = prompt_until_valid('Fedora listen.conf path', static function (string $v): ?string {
             if (!is_absolute_path($v)) return 'must be absolute path';
             return null;
@@ -1409,13 +1412,18 @@ function collect_install_plan(array $opts, array $platform_profile): array {
         ];
     }
 
-    $vhost_output_default = is_string($opts['vhost_output_path'] ?? null) && trim((string)$opts['vhost_output_path']) !== ''
-        ? (string)$opts['vhost_output_path']
-        : $vhost_output_default;
-    $vhost_output_path = prompt_until_valid('Vhost output path', static function (string $v): ?string {
-        if (!is_absolute_path($v)) return 'must be absolute path';
-        return null;
-    }, $vhost_output_default);
+    if (($platform_profile['name'] ?? '') === 'fedora') {
+        $vhost_output_path = $vhost_output_default;
+        fwrite(STDOUT, "Vhost output path: {$vhost_output_path}\n");
+    } else {
+        $vhost_output_default = is_string($opts['vhost_output_path'] ?? null) && trim((string)$opts['vhost_output_path']) !== ''
+            ? (string)$opts['vhost_output_path']
+            : $vhost_output_default;
+        $vhost_output_path = prompt_until_valid('Vhost output path', static function (string $v): ?string {
+            if (!is_absolute_path($v)) return 'must be absolute path';
+            return null;
+        }, $vhost_output_default);
+    }
 
     $install_sample_default = is_bool($opts['install_sample_data'] ?? null)
         ? (bool)$opts['install_sample_data']

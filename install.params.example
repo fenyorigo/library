@@ -17,7 +17,7 @@
 --target-dir=/var/www/katalogus
 --backup-dir=/var/backups/library
 --config-path=/etc/bookcatalog/katalogus.conf
---vhost-output-path=/etc/httpd/conf.d/8446-katalogus.conf
+# Fedora: vhost output path is auto-derived as /etc/httpd/conf.d/<apache-port>-<target_basename>.conf
 
 # Database connection (non-secret parts)
 --mysql-host=127.0.0.1

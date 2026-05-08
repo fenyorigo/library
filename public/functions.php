@@ -71,10 +71,57 @@ function start_secure_session(): void {
     }
 
     session_start();
+
+    csrf_token_ensure();
+
+    header('X-Frame-Options: DENY');
+    header('X-Content-Type-Options: nosniff');
+    header('X-XSS-Protection: 1; mode=block');
+    header("Content-Security-Policy: default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; object-src 'none'");
+}
+
+function csrf_token_ensure(): string {
+    if (empty($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
+    return (string)$_SESSION['csrf_token'];
+}
+
+function require_csrf(): void {
+    $method = strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET'));
+    if (in_array($method, ['GET', 'HEAD', 'OPTIONS'], true)) return;
+
+    $header = (string)($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '');
+    $stored = (string)($_SESSION['csrf_token'] ?? '');
+
+    if ($header === '' || $stored === '' || !hash_equals($stored, $header)) {
+        json_fail('CSRF validation failed', 403);
+    }
 }
 
 function auth_failure_delay(): void {
     usleep(200000);
+}
+
+function request_ip(): string {
+    $cf = trim((string)($_SERVER['HTTP_CF_CONNECTING_IP'] ?? ''));
+    $remote = trim((string)($_SERVER['REMOTE_ADDR'] ?? ''));
+    return $cf !== '' ? $cf : $remote;
+}
+
+function login_rate_limit_check(PDO $pdo, string $ip): void {
+    if ($ip === '' || !auth_events_table_exists($pdo)) return;
+
+    $st = $pdo->prepare("
+        SELECT COUNT(*) FROM AuthEvents
+         WHERE event_type = 'login_failed'
+           AND ip_address = ?
+           AND created_at > UTC_TIMESTAMP() - INTERVAL 15 MINUTE
+    ");
+    $st->execute([$ip]);
+    if ((int)$st->fetchColumn() >= 10) {
+        json_fail('Too many failed login attempts. Try again in 15 minutes.', 429);
+    }
 }
 
 function password_policy_errors(string $password, string $username = ''): array {
@@ -264,6 +311,11 @@ function utf8_clean(string $s): string {
     return ($out !== false) ? $out : $s;
 }
 
+function strip_control_chars(string $s): string {
+    $out = preg_replace('/[\r\n\x00-\x1f\x7f]/', '', $s);
+    return $out !== null ? $out : $s;
+}
+
 function current_app_version(): ?string {
     $pkg_path = dirname(__DIR__) . '/frontend/package.json';
     $pkg_raw = @file_get_contents($pkg_path);
@@ -387,7 +439,7 @@ function auth_event_request_meta(): array {
     $remote_ip = trim((string)($_SERVER['REMOTE_ADDR'] ?? ''));
     $ip_address = $cf_ip !== '' ? $cf_ip : ($remote_ip !== '' ? $remote_ip : '');
     $user_agent = trim((string)($_SERVER['HTTP_USER_AGENT'] ?? ''));
-    $user_agent = $user_agent !== '' ? utf8_clean($user_agent) : null;
+    $user_agent = $user_agent !== '' ? strip_control_chars(utf8_clean($user_agent)) : null;
 
     $details = [];
     if ($cf_ip !== '') $details['ip_cf'] = $cf_ip;
@@ -409,7 +461,7 @@ function log_auth_event(string $event_type, ?int $user_id, ?string $username_sna
         $details = array_merge($meta['details'], $details);
         $details_json = $details ? json_encode($details, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : null;
 
-        $username_snapshot = utf8_clean((string)($username_snapshot ?? ''));
+        $username_snapshot = strip_control_chars(utf8_clean((string)($username_snapshot ?? '')));
         if (strlen($username_snapshot) > 190) {
             $username_snapshot = substr($username_snapshot, 0, 190);
         }
@@ -929,6 +981,42 @@ function make_thumb(string $src, string $dst, int $max_w = 200): bool {
     return $ok;
 }
 
+function validate_image_magic_bytes(string $path, string $mime): bool {
+    $fh = @fopen($path, 'rb');
+    if ($fh === false) return false;
+    $header = (string)fread($fh, 12);
+    fclose($fh);
+    if (strlen($header) < 3) return false;
+
+    switch ($mime) {
+        case 'image/jpeg':
+            return substr($header, 0, 3) === "\xFF\xD8\xFF";
+        case 'image/png':
+            return substr($header, 0, 4) === "\x89PNG";
+        case 'image/webp':
+            return substr($header, 0, 4) === 'RIFF'
+                && strlen($header) >= 12
+                && substr($header, 8, 4) === 'WEBP';
+    }
+    return false;
+}
+
+function ensure_uploads_htaccess(string $uploads_dir): void {
+    $htaccess = rtrim($uploads_dir, '/') . '/.htaccess';
+    if (file_exists($htaccess)) return;
+
+    $content = <<<'HTACCESS'
+# Block script execution in the uploads directory.
+Options -ExecCGI -Indexes
+AddType text/plain .php .php3 .php4 .php5 .php7 .phtml .phar
+<FilesMatch "\.(php[0-9s]?|phtml|phar|cgi|pl|py|sh)$">
+    Require all denied
+</FilesMatch>
+HTACCESS;
+
+    @file_put_contents($htaccess, $content);
+}
+
 function process_cover_upload(PDO $pdo, int $book_id, array $file, int $thumb_max_w = 200): array {
     if ($book_id <= 0) {
         throw new RuntimeException('Invalid book_id', 400);
@@ -948,6 +1036,9 @@ function process_cover_upload(PDO $pdo, int $book_id, array $file, int $thumb_ma
     if (!isset($allowed[$mime])) {
         throw new RuntimeException('Unsupported file type', 415);
     }
+    if (!validate_image_magic_bytes($tmp_path, $mime)) {
+        throw new RuntimeException('File content does not match image type', 415);
+    }
     if ((int)($file['size'] ?? 0) > 10*1024*1024) {
         throw new RuntimeException('File too large', 413);
     }
@@ -956,6 +1047,7 @@ function process_cover_upload(PDO $pdo, int $book_id, array $file, int $thumb_ma
     if (!is_dir($base_dir) && !mkdir($base_dir, 0775, true)) {
         throw new RuntimeException('Unable to create upload directory');
     }
+    ensure_uploads_htaccess(__DIR__ . '/uploads');
 
     foreach (glob($base_dir . "/cover*.*") ?: [] as $old) { @unlink($old); }
     foreach (glob($base_dir . "/cover-thumb*.*") ?: [] as $old) { @unlink($old); }

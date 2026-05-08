@@ -71,6 +71,20 @@ function import_resolve_upload(array $file): array {
             throw new RuntimeException('Unable to open ZIP file');
         }
 
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $entry = $zip->getNameIndex($i);
+            if ($entry === false) continue;
+            if (strpos($entry, '..') !== false
+                || strpos($entry, "\0") !== false
+                || (strlen($entry) > 0 && $entry[0] === '/')
+                || preg_match('/^[a-zA-Z]:/', $entry)
+            ) {
+                $zip->close();
+                import_rrmdir($tmp_root);
+                throw new RuntimeException('ZIP contains unsafe file path: ' . basename($entry));
+            }
+        }
+
         if (!$zip->extractTo($tmp_root)) {
             $zip->close();
             import_rrmdir($tmp_root);
@@ -120,6 +134,15 @@ function import_resolve_upload(array $file): array {
     ];
 }
 
+function import_safe_file_path(string $base_root, string $path): ?string {
+    $real_base = realpath($base_root);
+    if ($real_base === false) return null;
+    $real_path = realpath($path);
+    if ($real_path === false) return null;
+    if (strpos($real_path, $real_base . '/') !== 0) return null;
+    return $real_path;
+}
+
 function import_find_cover_source(string $extract_root, int $old_id, ?string $preferred_rel): ?string {
     $roots = [];
 
@@ -141,7 +164,9 @@ function import_find_cover_source(string $extract_root, int $old_id, ?string $pr
     }
 
     foreach ($roots as $path) {
-        if (is_file($path) && is_readable($path)) return $path;
+        if (!is_file($path) || !is_readable($path)) continue;
+        if (import_safe_file_path($extract_root, $path) === null) continue;
+        return $path;
     }
     return null;
 }
@@ -167,7 +192,9 @@ function import_find_thumb_source(string $extract_root, int $old_id, ?string $pr
     }
 
     foreach ($roots as $path) {
-        if (is_file($path) && is_readable($path)) return $path;
+        if (!is_file($path) || !is_readable($path)) continue;
+        if (import_safe_file_path($extract_root, $path) === null) continue;
+        return $path;
     }
     return null;
 }
@@ -352,6 +379,10 @@ try {
     };
 
     $cover_jobs = [];
+
+    if (!$dry_run) {
+        $pdo->beginTransaction();
+    }
 
     while (($row = fgetcsv($fh, 0, $delimiter, '"', '\\')) !== false) {
         $total++;
@@ -579,7 +610,17 @@ try {
 
     fclose($fh);
 
-    if (!$dry_run && $with_covers && is_string($extract_root)) {
+    if (!$dry_run) {
+        if (!empty($errors)) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            $inserted = 0;
+            $cover_jobs = [];
+        } else {
+            $pdo->commit();
+        }
+    }
+
+    if (!$dry_run && $with_covers && is_string($extract_root) && !empty($cover_jobs)) {
         $uploads_root = realpath(__DIR__ . '/uploads') ?: (__DIR__ . '/uploads');
         foreach ($cover_jobs as $job) {
             $old_id = (int)$job['old_id'];

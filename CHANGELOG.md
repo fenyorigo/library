@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.7.0] - 2026-05-08
+### Security
+- Added HTTP security headers on every response: `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `X-XSS-Protection`, `Content-Security-Policy`
+- Implemented CSRF token protection for all authenticated state-changing endpoints (synchronizer token pattern; token distributed via `login.php` / `me.php`, validated via `X-CSRF-Token` header)
+- Frontend API calls unified through `apiFetch()` helper that automatically injects the CSRF token on mutating requests
+- Added image magic byte validation (JPEG/PNG/WEBP file header check) alongside MIME type detection in cover upload
+- Added `uploads/.htaccess` to block PHP and script execution in the upload directory; auto-created on first upload if missing
+- ZIP path traversal prevention: entry names validated before extraction in CSV import; `realpath()` + base-directory check applied to cover loops in backup
+- Login rate limiting: 10 failed attempts per IP per 15-minute window, tracked via existing `AuthEvents` table (no extra dependencies required)
+- Added `session_regenerate_id()` call after admin password reset to prevent session fixation
+- Stripped control characters (`\r`, `\n`, `\x00`–`\x1f`) from `user_agent` and `username_snapshot` before auth event persistence to prevent log injection
+
+### Changed
+- CSV import now uses an all-or-nothing transaction: any row error rolls back the entire import, leaving the catalog in a clean state
+
 ## [2.6.4] - 2026-04-27
 ### Changed
 - Installer `--params-file` flow now auto-accepts non-secret prompt defaults from provided values while still prompting for passwords and final proceed confirmation

@@ -29,6 +29,7 @@ try {
   }
 
   $pdo = pdo();
+  login_rate_limit_check($pdo, request_ip());
   $st = $pdo->prepare("SELECT user_id, username, password_hash, role, is_active
                        FROM Users WHERE username = ? LIMIT 1");
   $st->execute([$username]);
@@ -75,6 +76,7 @@ try {
     'ok' => true,
     'data' => [
       'user' => ['username' => $_SESSION['username'], 'role' => $_SESSION['role']],
+      'csrf_token' => csrf_token_ensure(),
       'admin_tools_warning' => $admin_tools_warning,
     ],
   ]);

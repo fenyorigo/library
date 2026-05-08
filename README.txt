@@ -7,3 +7,4 @@ Config is external via BOOKCATALOG_CONFIG.”
 	•	v2.3.3 – Duplicate candidate logic updated (subtitle-aware, author sort-name based). Existing duplicate reviews must be reset.
 	•	maintenance: optional SQL scripts available to remove zero-width characters and normalize decomposed accents
 	•	v2.6.4 – Installer params-file now auto-applies non-secret defaults; precheck accepts creatable nested target directories
+	•	v2.7.0 – Security hardening: HTTP security headers, CSRF token protection, file upload magic byte validation, ZIP path traversal prevention, login rate limiting, all-or-nothing CSV import transaction

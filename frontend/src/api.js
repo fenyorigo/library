@@ -9,6 +9,38 @@ export function apiUrl(path) {
   return new URL(path, API_BASE).toString();
 }
 
+/* -------------------- CSRF token management -------------------- */
+
+let _csrfToken = '';
+
+export function setCsrfToken(token) {
+  _csrfToken = typeof token === 'string' ? token : '';
+}
+
+function csrfHeader() {
+  return _csrfToken ? { 'X-CSRF-Token': _csrfToken } : {};
+}
+
+/**
+ * Wrapper around fetch() that always sends credentials and injects
+ * the CSRF token header on state-changing requests (non-GET/HEAD/OPTIONS).
+ */
+async function apiFetch(url, options = {}) {
+  const method = (options.method || 'GET').toUpperCase();
+  const isWrite = !['GET', 'HEAD', 'OPTIONS'].includes(method);
+  const res = await fetch(url, {
+    ...options,
+    credentials: 'same-origin',
+    headers: {
+      ...(isWrite ? csrfHeader() : {}),
+      ...(options.headers || {}),
+    },
+  });
+  return res;
+}
+
+/* -------------------- Response helper -------------------- */
+
 async function parseJsonResponse(res) {
   const json = await res.json().catch(() => ({}));
   if (!res.ok || json.ok === false) {
@@ -41,14 +73,14 @@ export async function fetchBooks(params = {}) {
   if (params.sort)     p.set('sort', params.sort);
   if (params.dir)      p.set('dir', params.dir);
 
-  const res = await fetch(u.toString(), { credentials: 'same-origin' });
+  const res = await apiFetch(u.toString());
   return parseJsonResponse(res);
 }
 
 export async function fetchBook(id) {
   const u = new URL('get_book.php', API_BASE);
   u.searchParams.set('id', String(id));
-  const res = await fetch(u.toString(), { credentials: 'same-origin' });
+  const res = await apiFetch(u.toString());
   return parseJsonResponse(res);
 }
 
@@ -59,18 +91,16 @@ export async function addBook(payload = {}, coverFile = null) {
     const fd = new FormData();
     fd.append("payload", JSON.stringify(payload));
     fd.append("image", coverFile);
-    const res = await fetch(apiUrl("addBook.php"), {
+    const res = await apiFetch(apiUrl("addBook.php"), {
       method: "POST",
       body: fd,
-      credentials: "same-origin",
     });
     return parseJsonResponse(res);
   }
 
-  const res = await fetch(apiUrl("addBook.php"), {
+  const res = await apiFetch(apiUrl("addBook.php"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
     body: JSON.stringify(payload),
   });
 
@@ -83,10 +113,9 @@ export async function updateBook(payload = {}) {
   const id = payload.id ?? payload.book_id;
   const body = { ...payload, id, book_id: id };
 
-  const res = await fetch(apiUrl('update_book.php'), {
+  const res = await apiFetch(apiUrl('update_book.php'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
     body: JSON.stringify(body),
   });
 
@@ -99,10 +128,7 @@ export async function deleteBook(id) {
   const u = new URL('delete_book.php', API_BASE);
   u.searchParams.set('id', String(id));
 
-  const res = await fetch(u.toString(), {
-    method: 'POST',
-    credentials: 'same-origin',
-  });
+  const res = await apiFetch(u.toString(), { method: 'POST' });
 
   return parseJsonResponse(res);
 }
@@ -110,7 +136,7 @@ export async function deleteBook(id) {
 /* -------------------- SUGGEST -------------------- */
 
 async function getJSON(path) {
-  const res = await fetch(apiUrl(path), { credentials: 'same-origin' });
+  const res = await apiFetch(apiUrl(path));
   const json = await parseJsonResponse(res);
   return json.data;
 }
@@ -126,10 +152,9 @@ export async function suggestAuthors(q) {
 }
 
 export async function createAuthor(payload = {}) {
-  const res = await fetch(apiUrl('create_author.php'), {
+  const res = await apiFetch(apiUrl('create_author.php'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
     body: JSON.stringify(payload),
   });
   return parseJsonResponse(res);
@@ -147,20 +172,18 @@ export async function fetchAuthors({ q = "", page = 1, per = 50, sort = "name", 
 }
 
 export async function deleteAuthor(authorId) {
-  const res = await fetch(apiUrl("delete_author.php"), {
+  const res = await apiFetch(apiUrl("delete_author.php"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
     body: JSON.stringify({ author_id: authorId }),
   });
   return parseJsonResponse(res);
 }
 
 export async function updateAuthor(authorId, payload = {}) {
-  const res = await fetch(apiUrl("update_author.php"), {
+  const res = await apiFetch(apiUrl("update_author.php"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
     body: JSON.stringify({ author_id: authorId, ...payload }),
   });
   return parseJsonResponse(res);
@@ -169,10 +192,9 @@ export async function updateAuthor(authorId, payload = {}) {
 /* -------------------- AUTH -------------------- */
 
 export async function login(username, password) {
-  const res = await fetch(apiUrl('login.php'), {
+  const res = await apiFetch(apiUrl('login.php'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
     body: JSON.stringify({ username, password }),
   });
 
@@ -180,18 +202,13 @@ export async function login(username, password) {
 }
 
 export async function logout() {
-  const res = await fetch(apiUrl('logout.php'), {
-    method: 'POST',
-    credentials: 'same-origin',
-  });
+  const res = await apiFetch(apiUrl('logout.php'), { method: 'POST' });
 
   return parseJsonResponse(res);
 }
 
 export async function me() {
-  const res = await fetch(apiUrl('me.php'), {
-    credentials: 'same-origin',
-  });
+  const res = await apiFetch(apiUrl('me.php'));
 
   return parseJsonResponse(res);
 }
@@ -199,9 +216,7 @@ export async function me() {
 /* -------------------- USERS -------------------- */
 
 export async function listUsers() {
-  const res = await fetch(apiUrl('list_users.php'), {
-    credentials: 'same-origin',
-  });
+  const res = await apiFetch(apiUrl('list_users.php'));
   return parseJsonResponse(res);
 }
 
@@ -216,75 +231,68 @@ export async function listAuthEvents(params = {}) {
   if (params.user_id) p.set('user_id', String(params.user_id));
   if (params.q) p.set('q', String(params.q));
 
-  const res = await fetch(u.toString(), { credentials: 'same-origin' });
+  const res = await apiFetch(u.toString());
   return parseJsonResponse(res);
 }
 
 export async function purgeAuthEvents(months) {
-  const res = await fetch(apiUrl('purge_auth_events.php'), {
+  const res = await apiFetch(apiUrl('purge_auth_events.php'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
     body: JSON.stringify({ months }),
   });
   return parseJsonResponse(res);
 }
 
 export async function purgeCatalog(confirm = "DELETE") {
-  const res = await fetch(apiUrl("purge_catalog.php"), {
+  const res = await apiFetch(apiUrl("purge_catalog.php"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
     body: JSON.stringify({ confirm }),
   });
   return parseJsonResponse(res);
 }
 
 export async function createUser(payload = {}) {
-  const res = await fetch(apiUrl('create_user_api.php'), {
+  const res = await apiFetch(apiUrl('create_user_api.php'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
     body: JSON.stringify(payload),
   });
   return parseJsonResponse(res);
 }
 
 export async function updateUser(payload = {}) {
-  const res = await fetch(apiUrl('update_user.php'), {
+  const res = await apiFetch(apiUrl('update_user.php'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
     body: JSON.stringify(payload),
   });
   return parseJsonResponse(res);
 }
 
 export async function deleteUser(userId) {
-  const res = await fetch(apiUrl('delete_user.php'), {
+  const res = await apiFetch(apiUrl('delete_user.php'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
     body: JSON.stringify({ user_id: userId }),
   });
   return parseJsonResponse(res);
 }
 
 export async function changePassword(payload = {}) {
-  const res = await fetch(apiUrl('change_password.php'), {
+  const res = await apiFetch(apiUrl('change_password.php'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
     body: JSON.stringify(payload),
   });
   return parseJsonResponse(res);
 }
 
 export async function adminResetPassword(payload = {}) {
-  const res = await fetch(apiUrl('admin_reset_password.php'), {
+  const res = await apiFetch(apiUrl('admin_reset_password.php'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
     body: JSON.stringify(payload),
   });
   return parseJsonResponse(res);
@@ -315,9 +323,8 @@ export async function updateUserPreferences(payload = {}, logoFile = null) {
   if (payload.remove_logo) fd.append('remove_logo', '1');
   if (logoFile) fd.append('logo', logoFile);
 
-  const res = await fetch(apiUrl('user_preferences.php'), {
+  const res = await apiFetch(apiUrl('user_preferences.php'), {
     method: 'POST',
-    credentials: 'same-origin',
     body: fd,
   });
 
@@ -325,9 +332,7 @@ export async function updateUserPreferences(payload = {}, logoFile = null) {
 }
 
 export async function fetchUserPreferences() {
-  const res = await fetch(apiUrl("user_preferences.php"), {
-    credentials: "same-origin",
-  });
+  const res = await apiFetch(apiUrl("user_preferences.php"));
   return parseJsonResponse(res);
 }
 
@@ -338,10 +343,9 @@ export async function fetchOrphanMaintenance() {
 }
 
 async function postMaintenance(payload) {
-  const res = await fetch(apiUrl('orphan_maintenance.php'), {
+  const res = await apiFetch(apiUrl('orphan_maintenance.php'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
     body: JSON.stringify(payload),
   });
   return parseJsonResponse(res);
